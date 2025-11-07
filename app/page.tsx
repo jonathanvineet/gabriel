@@ -24,9 +24,20 @@ export default function FileManager() {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [currentPath, setCurrentPath] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [showNewFolderInput, setShowNewFolderInput] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [dragActive, setDragActive] = useState(false);
+
+  // Debounced progress update for better performance
+  const updateProgress = (percent: number, message?: string) => {
+    requestAnimationFrame(() => {
+      setUploadPercent(percent);
+      if (message) setUploadProgress(message);
+    });
+  };
 
   useEffect(() => {
     loadFiles();
@@ -48,34 +59,193 @@ export default function FileManager() {
     }
   };
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (file: File, relativePath?: string) => {
+    setUploading(true);
+    setUploadProgress(`Preparing to upload ${file.name}...`);
+    setUploadPercent(5);
+    
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    setUploadProgress(`Reading file: ${file.name}...`);
+    setUploadPercent(10);
+    
     const formData = new FormData();
-    formData.append('file', file);
+    const fileKey = 'file-0';
+    formData.append(fileKey, file);
+    if (relativePath) {
+      formData.append('path-0', relativePath);
+    }
     formData.append('path', currentPath);
 
+    setUploadProgress(`Uploading ${file.name}...`);
+    setUploadPercent(20);
+
     try {
+      // Simulate progress for single file
+      let currentProgress = 20;
+      const progressInterval = setInterval(() => {
+        currentProgress += 8;
+        if (currentProgress >= 85) {
+          clearInterval(progressInterval);
+          setUploadProgress(`Processing ${file.name}...`);
+          setUploadPercent(85);
+        } else {
+          setUploadPercent(currentProgress);
+        }
+      }, 150);
+
       const response = await fetch('/api/files', {
         method: 'POST',
         body: formData,
       });
 
+      clearInterval(progressInterval);
+      setUploadProgress('Finalizing upload...');
+      setUploadPercent(95);
+
       const data = await response.json();
       if (data.success) {
+        if (data.compressed) {
+          setUploadProgress(`File compressed and saved (${data.totalSize})`);
+          setUploadPercent(100);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        } else {
+          setUploadProgress('Upload complete!');
+          setUploadPercent(100);
+          await new Promise(resolve => setTimeout(resolve, 800));
+        }
         loadFiles();
-        alert(`File "${file.name}" uploaded successfully!`);
+        return true;
       } else {
         alert(data.error || 'Upload failed');
+        return false;
       }
     } catch (error) {
       console.error('Error uploading file:', error);
       alert('Failed to upload file');
+      return false;
+    } finally {
+      setUploading(false);
+      setUploadProgress('');
+      setUploadPercent(0);
+    }
+  };
+
+  const handleMultipleFilesUpload = async (files: FileList) => {
+    setUploading(true);
+    setUploadProgress(`Preparing ${files.length} file${files.length > 1 ? 's' : ''}...`);
+    setUploadPercent(5);
+    
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    const formData = new FormData();
+    formData.append('path', currentPath);
+    
+    let fileIndex = 0;
+    let totalSize = 0;
+    
+    setUploadProgress(`Reading ${files.length} file${files.length > 1 ? 's' : ''}...`);
+    setUploadPercent(10);
+    
+    // Process files in chunks to avoid blocking
+    const CHUNK_SIZE = 10;
+    const totalFiles = files.length;
+    
+    for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
+      const chunk = Math.min(CHUNK_SIZE, totalFiles - i);
+      
+      // Process chunk
+      for (let j = 0; j < chunk && (i + j) < totalFiles; j++) {
+        const file = files[i + j];
+        totalSize += file.size;
+        const fileKey = `file-${fileIndex}`;
+        formData.append(fileKey, file);
+        
+        // Extract relative path from webkitRelativePath if available
+        if ((file as any).webkitRelativePath) {
+          formData.append(`path-${fileIndex}`, (file as any).webkitRelativePath);
+        } else {
+          formData.append(`path-${fileIndex}`, file.name);
+        }
+        fileIndex++;
+      }
+      
+      // Update progress
+      const prepProgress = 10 + Math.floor(((i + chunk) / totalFiles) * 15);
+      setUploadPercent(prepProgress);
+      setUploadProgress(`Processing file ${Math.min(i + chunk, totalFiles)} of ${totalFiles}...`);
+      
+      // Yield to browser to keep UI responsive
+      await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+    }
+
+    setUploadProgress(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}...`);
+    setUploadPercent(30);
+
+    try {
+      // Simulate upload progress
+      let currentProgress = 30;
+      const progressInterval = setInterval(() => {
+        currentProgress += 6;
+        if (currentProgress >= 85) {
+          clearInterval(progressInterval);
+          setUploadProgress('Processing uploaded files...');
+          setUploadPercent(85);
+        } else {
+          setUploadPercent(currentProgress);
+        }
+      }, 200);
+
+      const response = await fetch('/api/files', {
+        method: 'POST',
+        body: formData,
+      });
+
+      clearInterval(progressInterval);
+      setUploadProgress('Saving files...');
+      setUploadPercent(95);
+
+      const data = await response.json();
+      if (data.success) {
+        if (data.compressed) {
+          setUploadProgress(`${files.length} files compressed and saved (${data.totalSize})`);
+          setUploadPercent(100);
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        } else {
+          setUploadProgress('Upload complete!');
+          setUploadPercent(100);
+          await new Promise(resolve => setTimeout(resolve, 800));
+        }
+        loadFiles();
+        alert(data.message || 'Files uploaded successfully!');
+      } else {
+        alert(data.error || 'Upload failed');
+      }
+    } catch (error) {
+      console.error('Error uploading files:', error);
+      alert('Failed to upload files');
+    } finally {
+      setUploading(false);
+      setUploadProgress('');
+      setUploadPercent(0);
     }
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      handleFileUpload(file);
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      if (files.length === 1) {
+        handleFileUpload(files[0]);
+      } else {
+        handleMultipleFilesUpload(files);
+      }
+    }
+  };
+
+  const handleFolderInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      handleMultipleFilesUpload(files);
     }
   };
 
@@ -181,13 +351,171 @@ export default function FileManager() {
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileUpload(e.dataTransfer.files[0]);
+    if (e.dataTransfer.items) {
+      const items = Array.from(e.dataTransfer.items);
+      const entries: any[] = [];
+      
+      for (const item of items) {
+        const entry = item.webkitGetAsEntry?.();
+        if (entry) {
+          entries.push(entry);
+        }
+      }
+
+      if (entries.length > 0) {
+        await processDroppedEntries(entries);
+      }
+    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleMultipleFilesUpload(e.dataTransfer.files);
+    }
+  };
+
+  const processDroppedEntries = async (entries: any[]) => {
+    setUploading(true);
+    setUploadProgress('Analyzing dropped items...');
+    setUploadPercent(5);
+    
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    const files: { file: File; path: string }[] = [];
+    
+    setUploadProgress('Reading folder structure...');
+    setUploadPercent(10);
+    
+    const readEntry = async (entry: any, basePath = ''): Promise<void> => {
+      if (entry.isFile) {
+        return new Promise((resolve) => {
+          entry.file((file: File) => {
+            const relativePath = basePath ? `${basePath}/${file.name}` : file.name;
+            files.push({ file, path: relativePath });
+            resolve();
+          });
+        });
+      } else if (entry.isDirectory) {
+        const dirReader = entry.createReader();
+        return new Promise((resolve) => {
+          dirReader.readEntries(async (entries: any[]) => {
+            const newBasePath = basePath ? `${basePath}/${entry.name}` : entry.name;
+            
+            // Process directory entries in batches to avoid blocking
+            const BATCH_SIZE = 5;
+            for (let i = 0; i < entries.length; i += BATCH_SIZE) {
+              const batch = entries.slice(i, i + BATCH_SIZE);
+              await Promise.all(batch.map(e => readEntry(e, newBasePath)));
+              
+              // Yield to browser
+              if (entries.length > 20) {
+                await new Promise(r => requestAnimationFrame(() => r(undefined)));
+              }
+            }
+            resolve();
+          });
+        });
+      }
+    };
+
+    for (const entry of entries) {
+      await readEntry(entry);
+    }
+
+    if (files.length > 0) {
+      setUploadProgress(`Found ${files.length} file${files.length > 1 ? 's' : ''}. Preparing upload...`);
+      setUploadPercent(20);
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      const formData = new FormData();
+      formData.append('path', currentPath);
+      
+      setUploadProgress('Packaging files...');
+      setUploadPercent(25);
+      
+      // Process files in chunks
+      const CHUNK_SIZE = 15;
+      const totalFiles = files.length;
+      
+      for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
+        const chunk = Math.min(CHUNK_SIZE, totalFiles - i);
+        
+        for (let j = 0; j < chunk && (i + j) < totalFiles; j++) {
+          const item = files[i + j];
+          const fileKey = `file-${i + j}`;
+          formData.append(fileKey, item.file);
+          formData.append(`path-${i + j}`, item.path);
+        }
+        
+        // Update progress
+        const packageProgress = 25 + Math.floor(((i + chunk) / totalFiles) * 10);
+        setUploadPercent(packageProgress);
+        
+        // Show progress every chunk
+        if (totalFiles > 50 && (i + chunk) % 50 === 0) {
+          setUploadProgress(`Packaging ${i + chunk} of ${totalFiles} files...`);
+        }
+        
+        // Yield to browser
+        await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
+      }
+
+      setUploadProgress(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}...`);
+      setUploadPercent(40);
+
+      try {
+        // Simulate upload progress
+        let currentProgress = 40;
+        const progressInterval = setInterval(() => {
+          currentProgress += 5;
+          if (currentProgress >= 85) {
+            clearInterval(progressInterval);
+            setUploadProgress('Processing uploaded files...');
+            setUploadPercent(85);
+          } else {
+            setUploadPercent(currentProgress);
+          }
+        }, 250);
+
+        const response = await fetch('/api/files', {
+          method: 'POST',
+          body: formData,
+        });
+
+        clearInterval(progressInterval);
+        setUploadProgress('Finalizing upload...');
+        setUploadPercent(95);
+
+        const data = await response.json();
+        if (data.success) {
+          if (data.compressed) {
+            setUploadProgress(`Files compressed and saved (${data.totalSize})`);
+            setUploadPercent(100);
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          } else {
+            setUploadProgress('Upload complete!');
+            setUploadPercent(100);
+            await new Promise(resolve => setTimeout(resolve, 800));
+          }
+          loadFiles();
+          alert(data.message || 'Files uploaded successfully!');
+        } else {
+          alert(data.error || 'Upload failed');
+        }
+      } catch (error) {
+        console.error('Error uploading files:', error);
+        alert('Failed to upload files');
+      } finally {
+        setUploading(false);
+        setUploadProgress('');
+        setUploadPercent(0);
+      }
+    } else {
+      setUploading(false);
+      setUploadProgress('');
+      setUploadPercent(0);
     }
   };
 
@@ -203,6 +531,29 @@ export default function FileManager() {
             <p className="text-blue-100">Upload, organize, and manage your files</p>
           </div>
 
+          {/* Upload Progress Indicator */}
+          {uploading && (
+            <div className="bg-blue-50 border-b border-blue-200 p-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
+                    <span className="text-blue-700 font-medium">{uploadProgress}</span>
+                  </div>
+                  <span className="text-blue-600 font-semibold">{uploadPercent}%</span>
+                </div>
+                {/* Progress Bar */}
+                <div className="w-full bg-blue-200 rounded-full h-2.5 overflow-hidden">
+                  <div 
+                    className="bg-gradient-to-r from-blue-500 to-blue-600 h-2.5 rounded-full transition-all duration-300 ease-out animate-pulse"
+                    style={{ width: `${uploadPercent}%` }}
+                  ></div>
+                </div>
+                <p className="text-xs text-blue-600 text-right">Page is responsive - you can navigate away if needed</p>
+              </div>
+            </div>
+          )}
+
           {/* Toolbar */}
           <div className="border-b bg-gray-50 p-4">
             <div className="flex flex-wrap gap-3 items-center">
@@ -210,6 +561,7 @@ export default function FileManager() {
                 onClick={navigateHome}
                 className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
                 title="Home"
+                disabled={uploading}
               >
                 <Home size={18} />
                 <span className="hidden sm:inline">Home</span>
@@ -218,26 +570,42 @@ export default function FileManager() {
               {currentPath && (
                 <button
                   onClick={navigateBack}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={uploading}
                 >
                   <ArrowLeft size={18} />
                   <span className="hidden sm:inline">Back</span>
                 </button>
               )}
 
-              <label className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer transition-colors">
+              <label className={`flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors ${uploading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
                 <Upload size={18} />
                 <span className="hidden sm:inline">Upload File</span>
                 <input
                   type="file"
                   onChange={handleFileInputChange}
                   className="hidden"
+                  disabled={uploading}
+                />
+              </label>
+
+              <label className={`flex items-center gap-2 px-4 py-2 bg-green-700 text-white rounded-lg hover:bg-green-800 transition-colors ${uploading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                <Folder size={18} />
+                <span className="hidden sm:inline">Upload Folder</span>
+                <input
+                  type="file"
+                  onChange={handleFolderInputChange}
+                  className="hidden"
+                  {...({ webkitdirectory: '', directory: '' } as any)}
+                  multiple
+                  disabled={uploading}
                 />
               </label>
 
               <button
                 onClick={() => setShowNewFolderInput(!showNewFolderInput)}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={uploading}
               >
                 <FolderPlus size={18} />
                 <span className="hidden sm:inline">New Folder</span>
@@ -304,13 +672,30 @@ export default function FileManager() {
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
-            className={`relative ${dragActive ? 'bg-blue-50' : ''}`}
+            className={`relative ${dragActive && !uploading ? 'bg-blue-50' : ''}`}
           >
-            {dragActive && (
+            {dragActive && !uploading && (
               <div className="absolute inset-0 bg-blue-100 bg-opacity-90 flex items-center justify-center z-10 border-4 border-dashed border-blue-400 m-4 rounded-lg">
                 <div className="text-center">
                   <Upload size={48} className="mx-auto text-blue-600 mb-2" />
                   <p className="text-xl font-semibold text-blue-600">Drop file here to upload</p>
+                </div>
+              </div>
+            )}
+
+            {uploading && (
+              <div className="absolute inset-0 bg-gray-100 bg-opacity-80 flex items-center justify-center z-20 m-4 rounded-lg">
+                <div className="text-center bg-white p-8 rounded-xl shadow-lg max-w-md w-full mx-4">
+                  <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mx-auto mb-4"></div>
+                  <p className="text-xl font-semibold text-gray-800 mb-2">{uploadProgress}</p>
+                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden mb-2">
+                    <div 
+                      className="bg-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${uploadPercent}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-2xl font-bold text-blue-600 mb-1">{uploadPercent}%</p>
+                  <p className="text-sm text-gray-500">Please wait...</p>
                 </div>
               </div>
             )}

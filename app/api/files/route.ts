@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { shouldCompress, compressFile, compressFolder, getFolderSize, formatBytes } from '@/lib/compression';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
+const COMPRESSION_THRESHOLD = 100 * 1024 * 1024; // 100 MB
 
 // Ensure uploads directory exists
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -49,13 +51,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    const file = formData.get('file') as File;
     const dirPath = formData.get('path') as string || '';
-
-    if (!file) {
-      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
-    }
-
     const uploadPath = path.join(UPLOAD_DIR, dirPath);
     
     // Security check
@@ -68,16 +64,94 @@ export async function POST(request: NextRequest) {
       fs.mkdirSync(uploadPath, { recursive: true });
     }
 
-    const filePath = path.join(uploadPath, file.name);
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    const uploadedFiles: string[] = [];
+    const compressedFiles: string[] = [];
+    let totalSize = 0;
+    
+    // Process files in batches to reduce memory usage
+    const fileData: Array<{ relativePath: string; filePath: string; size: number }> = [];
+    const entries = Array.from(formData.entries());
+    const fileEntries = entries.filter(([key]) => key.startsWith('file-'));
+    
+    // Process files in batches
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < fileEntries.length; i += BATCH_SIZE) {
+      const batch = fileEntries.slice(i, i + BATCH_SIZE);
+      
+      await Promise.all(batch.map(async ([key, value]) => {
+        const file = value as File;
+        const relativePath = formData.get(`path-${key.substring(5)}`) as string || file.name;
+        
+        // Create subdirectories if needed
+        const fileDir = path.dirname(relativePath);
+        if (fileDir && fileDir !== '.') {
+          const fullDir = path.join(uploadPath, fileDir);
+          if (!fs.existsSync(fullDir)) {
+            fs.mkdirSync(fullDir, { recursive: true });
+          }
+        }
 
-    fs.writeFileSync(filePath, buffer);
+        const filePath = path.join(uploadPath, relativePath);
+        const bytes = await file.arrayBuffer();
+        const buffer = Buffer.from(bytes);
+
+        // Use async write for better performance
+        await fs.promises.writeFile(filePath, buffer);
+        
+        const fileSize = buffer.length;
+        totalSize += fileSize;
+        fileData.push({ relativePath, filePath, size: fileSize });
+        uploadedFiles.push(relativePath);
+      }));
+    }
+
+    if (uploadedFiles.length === 0) {
+      return NextResponse.json({ error: 'No files provided' }, { status: 400 });
+    }
+
+    // Check if we need to compress (multiple files or folder structure)
+    if (uploadedFiles.length > 1 || uploadedFiles.some(f => f.includes('/'))) {
+      // Check if the total size warrants compression
+      if (totalSize > COMPRESSION_THRESHOLD) {
+        console.log(`Total size ${formatBytes(totalSize)} exceeds threshold. Compressing...`);
+        
+        // Compress entire folder structure
+        try {
+          await compressFolder(uploadPath);
+          compressedFiles.push('Folder compressed');
+        } catch (compressError) {
+          console.error('Compression error:', compressError);
+          // Continue without compression
+        }
+      }
+    } else {
+      // Single file - check if it needs compression
+      const fileInfo = fileData[0];
+      if (shouldCompress(fileInfo.size)) {
+        console.log(`File ${fileInfo.relativePath} (${formatBytes(fileInfo.size)}) exceeds threshold. Compressing...`);
+        
+        try {
+          await compressFile(fileInfo.filePath);
+          compressedFiles.push(fileInfo.relativePath);
+        } catch (compressError) {
+          console.error('Compression error:', compressError);
+          // Continue without compression
+        }
+      }
+    }
+
+    const message = compressedFiles.length > 0
+      ? `${uploadedFiles.length} file${uploadedFiles.length > 1 ? 's' : ''} uploaded and compressed successfully`
+      : uploadedFiles.length === 1
+        ? 'File uploaded successfully'
+        : `${uploadedFiles.length} files uploaded successfully`;
 
     return NextResponse.json({ 
       success: true, 
-      message: 'File uploaded successfully',
-      fileName: file.name 
+      message,
+      filesUploaded: uploadedFiles.length,
+      compressed: compressedFiles.length > 0,
+      totalSize: formatBytes(totalSize)
     });
   } catch (error) {
     console.error('Error uploading file:', error);
