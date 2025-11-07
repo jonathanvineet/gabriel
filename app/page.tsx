@@ -133,6 +133,73 @@ export default function FileManager() {
 
   const handleMultipleFilesUpload = async (files: FileList) => {
     setUploading(true);
+    const totalFiles = files.length;
+    const BATCH_SIZE = 20; // Upload 20 files per batch
+    const batches: File[][] = [];
+    
+    // Split files into batches
+    const fileArray = Array.from(files);
+    for (let i = 0; i < fileArray.length; i += BATCH_SIZE) {
+      batches.push(fileArray.slice(i, i + BATCH_SIZE));
+    }
+    
+    updateProgress(5, `Preparing ${totalFiles} file${totalFiles > 1 ? 's' : ''}...`);
+    
+    try {
+      let uploadedFiles = 0;
+      
+      // Process batches sequentially
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        const isLastBatch = batchIndex === batches.length - 1;
+        
+        updateProgress(
+          10 + (batchIndex / batches.length) * 80,
+          `Uploading batch ${batchIndex + 1}/${batches.length} (${batch.length} files)...`
+        );
+        
+        const formData = new FormData();
+        formData.append('path', currentPath);
+        formData.append('batchIndex', batchIndex.toString());
+        formData.append('totalBatches', batches.length.toString());
+        
+        batch.forEach((file, idx) => {
+          formData.append(`file-${idx}`, file);
+        });
+        
+        const response = await fetch('/api/upload-batch', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || 'Upload failed');
+        }
+        
+        uploadedFiles += batch.length;
+        updateProgress(
+          10 + (uploadedFiles / totalFiles) * 85,
+          `Uploaded ${uploadedFiles}/${totalFiles} files...`
+        );
+      }
+      
+      updateProgress(100, 'All files uploaded successfully!');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      loadFiles();
+    } catch (error) {
+      console.error('Error uploading files:', error);
+      alert('Failed to upload files');
+    } finally {
+      setUploading(false);
+      setUploadProgress('');
+      setUploadPercent(0);
+    }
+  };
+
+  // OLD CHUNKED VERSION REPLACED ABOVE
+  const handleMultipleFilesUpload_OLD = async (files: FileList) => {
+    setUploading(true);
     setUploadProgress(`Preparing ${files.length} file${files.length > 1 ? 's' : ''}...`);
     setUploadPercent(5);
     
@@ -377,15 +444,11 @@ export default function FileManager() {
 
   const processDroppedEntries = async (entries: any[]) => {
     setUploading(true);
-    setUploadProgress('Analyzing dropped items...');
-    setUploadPercent(5);
-    
-    await new Promise(resolve => setTimeout(resolve, 50));
+    updateProgress(5, 'Analyzing dropped items...');
     
     const files: { file: File; path: string }[] = [];
     
-    setUploadProgress('Reading folder structure...');
-    setUploadPercent(10);
+    updateProgress(10, 'Reading folder structure...');
     
     const readEntry = async (entry: any, basePath = ''): Promise<void> => {
       if (entry.isFile) {
@@ -402,16 +465,11 @@ export default function FileManager() {
           dirReader.readEntries(async (entries: any[]) => {
             const newBasePath = basePath ? `${basePath}/${entry.name}` : entry.name;
             
-            // Process directory entries in batches to avoid blocking
-            const BATCH_SIZE = 5;
+            // Process directory entries in batches
+            const BATCH_SIZE = 10;
             for (let i = 0; i < entries.length; i += BATCH_SIZE) {
               const batch = entries.slice(i, i + BATCH_SIZE);
               await Promise.all(batch.map(e => readEntry(e, newBasePath)));
-              
-              // Yield to browser
-              if (entries.length > 20) {
-                await new Promise(r => requestAnimationFrame(() => r(undefined)));
-              }
             }
             resolve();
           });
@@ -423,96 +481,69 @@ export default function FileManager() {
       await readEntry(entry);
     }
 
-    if (files.length > 0) {
-      setUploadProgress(`Found ${files.length} file${files.length > 1 ? 's' : ''}. Preparing upload...`);
-      setUploadPercent(20);
-      
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      const formData = new FormData();
-      formData.append('path', currentPath);
-      
-      setUploadProgress('Packaging files...');
-      setUploadPercent(25);
-      
-      // Process files in chunks
-      const CHUNK_SIZE = 15;
-      const totalFiles = files.length;
-      
-      for (let i = 0; i < totalFiles; i += CHUNK_SIZE) {
-        const chunk = Math.min(CHUNK_SIZE, totalFiles - i);
-        
-        for (let j = 0; j < chunk && (i + j) < totalFiles; j++) {
-          const item = files[i + j];
-          const fileKey = `file-${i + j}`;
-          formData.append(fileKey, item.file);
-          formData.append(`path-${i + j}`, item.path);
-        }
-        
-        // Update progress
-        const packageProgress = 25 + Math.floor(((i + chunk) / totalFiles) * 10);
-        setUploadPercent(packageProgress);
-        
-        // Show progress every chunk
-        if (totalFiles > 50 && (i + chunk) % 50 === 0) {
-          setUploadProgress(`Packaging ${i + chunk} of ${totalFiles} files...`);
-        }
-        
-        // Yield to browser
-        await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
-      }
+    if (files.length === 0) {
+      setUploading(false);
+      alert('No files found');
+      return;
+    }
 
-      setUploadProgress(`Uploading ${files.length} file${files.length > 1 ? 's' : ''}...`);
-      setUploadPercent(40);
+    updateProgress(20, `Found ${files.length} file${files.length > 1 ? 's' : ''}. Starting upload...`);
+    
+    const BATCH_SIZE = 20; // Upload 20 files per batch
+    const totalFiles = files.length;
+    const batches: typeof files[] = [];
+    
+    // Split files into batches
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      batches.push(files.slice(i, i + BATCH_SIZE));
+    }
 
-      try {
-        // Simulate upload progress
-        let currentProgress = 40;
-        const progressInterval = setInterval(() => {
-          currentProgress += 5;
-          if (currentProgress >= 85) {
-            clearInterval(progressInterval);
-            setUploadProgress('Processing uploaded files...');
-            setUploadPercent(85);
-          } else {
-            setUploadPercent(currentProgress);
-          }
-        }, 250);
-
-        const response = await fetch('/api/files', {
+    try {
+      let uploadedFiles = 0;
+      
+      // Process batches sequentially
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        
+        updateProgress(
+          20 + (batchIndex / batches.length) * 70,
+          `Uploading batch ${batchIndex + 1}/${batches.length} (${batch.length} files)...`
+        );
+        
+        const formData = new FormData();
+        formData.append('path', currentPath);
+        formData.append('batchIndex', batchIndex.toString());
+        formData.append('totalBatches', batches.length.toString());
+        
+        batch.forEach((item, idx) => {
+          formData.append(`file-${idx}`, item.file);
+          formData.append(`path-${idx}`, item.path);
+        });
+        
+        const response = await fetch('/api/upload-batch', {
           method: 'POST',
           body: formData,
         });
-
-        clearInterval(progressInterval);
-        setUploadProgress('Finalizing upload...');
-        setUploadPercent(95);
-
+        
         const data = await response.json();
-        if (data.success) {
-          if (data.compressed) {
-            setUploadProgress(`Files compressed and saved (${data.totalSize})`);
-            setUploadPercent(100);
-            await new Promise(resolve => setTimeout(resolve, 1500));
-          } else {
-            setUploadProgress('Upload complete!');
-            setUploadPercent(100);
-            await new Promise(resolve => setTimeout(resolve, 800));
-          }
-          loadFiles();
-          alert(data.message || 'Files uploaded successfully!');
-        } else {
-          alert(data.error || 'Upload failed');
+        if (!data.success) {
+          throw new Error(data.error || 'Upload failed');
         }
-      } catch (error) {
-        console.error('Error uploading files:', error);
-        alert('Failed to upload files');
-      } finally {
-        setUploading(false);
-        setUploadProgress('');
-        setUploadPercent(0);
+        
+        uploadedFiles += batch.length;
+        updateProgress(
+          20 + (uploadedFiles / totalFiles) * 75,
+          `Uploaded ${uploadedFiles}/${totalFiles} files...`
+        );
       }
-    } else {
+      
+      updateProgress(100, `All ${totalFiles} files uploaded successfully!`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      loadFiles();
+    } catch (error) {
+      console.error('Error uploading files:', error);
+      alert('Failed to upload files');
+    } finally {
       setUploading(false);
       setUploadProgress('');
       setUploadPercent(0);

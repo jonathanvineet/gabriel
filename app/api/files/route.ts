@@ -27,21 +27,44 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Directory not found' }, { status: 404 });
     }
 
-    const items = fs.readdirSync(fullPath);
-    const fileList = items.map(item => {
-      const itemPath = path.join(fullPath, item);
-      const stats = fs.statSync(itemPath);
+    // Use async readdir for better performance
+    const items = await fs.promises.readdir(fullPath);
+    
+    // Process files in parallel batches for speed
+    const BATCH_SIZE = 50;
+    const fileList = [];
+    
+    for (let i = 0; i < items.length; i += BATCH_SIZE) {
+      const batch = items.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (item) => {
+          try {
+            const itemPath = path.join(fullPath, item);
+            const stats = await fs.promises.stat(itemPath);
+            
+            return {
+              name: item,
+              isDirectory: stats.isDirectory(),
+              size: stats.size,
+              modified: stats.mtime,
+              path: path.join(dirPath, item).replace(/\\/g, '/')
+            };
+          } catch (err) {
+            // Skip files that can't be accessed
+            console.warn(`Cannot access ${item}:`, err);
+            return null;
+          }
+        })
+      );
       
-      return {
-        name: item,
-        isDirectory: stats.isDirectory(),
-        size: stats.size,
-        modified: stats.mtime,
-        path: path.join(dirPath, item).replace(/\\/g, '/')
-      };
-    });
+      fileList.push(...batchResults.filter(Boolean));
+    }
 
-    return NextResponse.json({ files: fileList, currentPath: dirPath });
+    return NextResponse.json({ 
+      files: fileList, 
+      currentPath: dirPath,
+      count: fileList.length 
+    });
   } catch (error) {
     console.error('Error reading directory:', error);
     return NextResponse.json({ error: 'Failed to read directory' }, { status: 500 });
