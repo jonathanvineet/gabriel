@@ -15,9 +15,26 @@
 
 body {
   background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #0f0f0f 100%);
+  background-image: url('/gotham-skyline.svg');
+  background-attachment: fixed;
+  background-size: cover;
+  background-position: center;
   color: var(--foreground);
   font-family: var(--font-geist-sans);
   min-height: 100vh;
+  position: relative;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(10, 10, 10, 0.7) 0%, rgba(26, 26, 26, 0.5) 50%, rgba(15, 15, 15, 0.7) 100%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 /* Batman-themed components */
@@ -165,4 +182,135 @@ body {
   border-color: #ffd700;
   background: rgba(255, 215, 0, 0.05);
   box-shadow: 0 8px 20px rgba(255, 215, 0, 0.2);
+}
+
+/* Batarang spinner animation */
+.batarang-spinner {
+  animation: spin-batarang 2s linear infinite;
+}
+
+@keyframes spin-batarang {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pulsing glow effect */
+.batarang-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 5px rgba(255, 215, 0, 0.4));
+  }
+  50% {
+    filter: drop-shadow(0 0 20px rgba(255, 215, 0, 0.8));
+  }
+}
+
+/* Loading screen styles */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(10, 10, 10, 0.95) 0%, rgba(26, 26, 26, 0.9) 50%, rgba(15, 15, 15, 0.95) 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  backdrop-filter: blur(5px);
+}
+
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+}
+
+.loading-logo {
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.loading-message {
+  color: #ffd700;
+  font-size: 1.5rem;
+  font-weight: bold;
+  text-align: center;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-family: var(--font-geist-mono);
+}
+
+.loading-progress {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  color: #ffd700;
+}
+
+.loading-percent {
+  font-size: 1.25rem;
+  font-weight: bold;
+  font-family: var(--font-geist-mono);
+}
+
+.progress-bar-container {
+  width: 300px;
+  height: 4px;
+  background: rgba(255, 215, 0, 0.1);
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ffd700 0%, #ffb900 50%, #ffd700 100%);
+  background-size: 200% 100%;
+  transition: width 0.3s ease;
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.6);
+  animation: progress-shimmer 1.5s infinite linear;
+}
+
+@keyframes progress-shimmer {
+  0% {
+    background-position: -100% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+/* File/Folder icon with batarang */
+.batarang-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.batarang-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 0 3px rgba(255, 215, 0, 0.5));
 }

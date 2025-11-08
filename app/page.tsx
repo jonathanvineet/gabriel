@@ -2,6 +2,7 @@
 
 import { useState, useEffect, DragEvent } from 'react';
 import { Upload, FolderPlus, Download, Trash2, Folder, File, Home, ChevronRight, Loader2, FileText, FileCode, Film, Music, Archive, Image as ImageIcon, Eye, ArrowLeft, Cloud, CloudRain, CloudSnow, Sun, CloudDrizzle, Wind, Camera, Clock, HardDrive, MessageSquare } from 'lucide-react';
+import LoadingScreen from './components/LoadingScreen';
 
 interface FileItem {
   name: string;
@@ -24,6 +25,7 @@ export default function FileManager() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [uploadPercent, setUploadPercent] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [showNewFolderInput, setShowNewFolderInput] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [dragActive, setDragActive] = useState(false);
@@ -38,6 +40,14 @@ export default function FileManager() {
   const [newTodo, setNewTodo] = useState('');
   const [showTodoInput, setShowTodoInput] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+
+  const loadingMessages = {
+    files: 'Scanning Gotham Archives...',
+    upload: 'Deploying to Batcave...',
+    folder: 'Constructing new sector...',
+    delete: 'Neutralizing threat...',
+    default: 'Analyzing data...',
+  };
 
   // Update time every second
   useEffect(() => {
@@ -106,6 +116,7 @@ export default function FileManager() {
 
   const loadFiles = async () => {
     setLoading(true);
+    setLoadingMessage(loadingMessages.files);
     try {
       const response = await fetch(`/api/files?path=${encodeURIComponent(currentPath)}`);
       const data = await response.json();
@@ -117,11 +128,13 @@ export default function FileManager() {
       alert('Failed to load files');
     } finally {
       setLoading(false);
+      setLoadingMessage('');
     }
   };
 
   const handleFileUpload = async (file: File, relativePath?: string) => {
     setUploading(true);
+    setLoadingMessage(loadingMessages.upload);
     setUploadProgress(`Preparing to upload ${file.name}...`);
     setUploadPercent(5);
     
@@ -189,21 +202,23 @@ export default function FileManager() {
       setUploading(false);
       setUploadProgress('');
       setUploadPercent(0);
+      setLoadingMessage('');
     }
   };
 
   const handleMultipleFilesUpload = async (files: FileList) => {
     setUploading(true);
+    setLoadingMessage(loadingMessages.upload);
     const totalFiles = files.length;
     const BATCH_SIZE = 20; // Upload 20 files per batch
     const batches: File[][] = [];
-    
+
     // Split files into batches
     const fileArray = Array.from(files);
     for (let i = 0; i < fileArray.length; i += BATCH_SIZE) {
       batches.push(fileArray.slice(i, i + BATCH_SIZE));
     }
-    
+
     updateProgress(5, `Preparing ${totalFiles} file${totalFiles > 1 ? 's' : ''}...`);
     
     try {
@@ -255,6 +270,7 @@ export default function FileManager() {
       setUploading(false);
       setUploadProgress('');
       setUploadPercent(0);
+      setLoadingMessage('');
     }
   };
 
@@ -383,6 +399,7 @@ export default function FileManager() {
       return;
     }
 
+    setLoadingMessage(loadingMessages.folder);
     try {
       const response = await fetch('/api/folder', {
         method: 'POST',
@@ -405,6 +422,8 @@ export default function FileManager() {
     } catch (error) {
       console.error('Error creating folder:', error);
       alert('Failed to create folder');
+    } finally {
+      setLoadingMessage('');
     }
   };
 
@@ -413,6 +432,7 @@ export default function FileManager() {
       return;
     }
 
+    setLoadingMessage(loadingMessages.delete);
     try {
       const response = await fetch('/api/files', {
         method: 'DELETE',
@@ -430,6 +450,8 @@ export default function FileManager() {
     } catch (error) {
       console.error('Error deleting:', error);
       alert('Failed to delete');
+    } finally {
+      setLoadingMessage('');
     }
   };
 
@@ -505,6 +527,7 @@ export default function FileManager() {
 
   const processDroppedEntries = async (entries: any[]) => {
     setUploading(true);
+    setLoadingMessage(loadingMessages.upload);
     updateProgress(5, 'Analyzing dropped items...');
     
     const files: { file: File; path: string }[] = [];
@@ -608,6 +631,7 @@ export default function FileManager() {
       setUploading(false);
       setUploadProgress('');
       setUploadPercent(0);
+      setLoadingMessage('');
     }
   };
 
@@ -639,6 +663,10 @@ export default function FileManager() {
 
   return (
     <div className="min-h-screen bg-black">
+      {(loading || uploading) && loadingMessage && (
+        <LoadingScreen message={loadingMessage} percent={uploading ? uploadPercent : 50} />
+      )}
+
       <div className="container mx-auto px-6 py-8 max-w-7xl">
         
         {/* Modern Dashboard */}
@@ -831,7 +859,12 @@ export default function FileManager() {
                 </div>
               ) : files.length === 0 ? (
                 <div className="text-center py-12">
-                  <Folder size={48} className="text-white/20 mx-auto mb-3" />
+                  <div className="w-12 h-12 mx-auto mb-3 opacity-20">
+                    <img
+                      src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                      alt="Folder"
+                    />
+                  </div>
                   <p className="text-white/40">No files yet</p>
                 </div>
               ) : (
@@ -840,9 +873,14 @@ export default function FileManager() {
                     <div key={index} className="group">
                       <div className="aspect-square bg-black/50 rounded-2xl overflow-hidden mb-2 flex items-center justify-center border border-white/10 group-hover:border-amber-400/50 transition-all">
                         {file.isDirectory ? (
-                          <Folder size={32} className="text-amber-400" />
+                          <div className="batarang-icon" style={{ width: '32px', height: '32px' }}>
+                            <img
+                              src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                              alt="Folder"
+                            />
+                          </div>
                         ) : isImageFile(file.name) ? (
-                          <img 
+                          <img
                             src={`/api/download?path=${encodeURIComponent(file.path)}`}
                             alt={file.name}
                             className="w-full h-full object-cover"
@@ -1000,7 +1038,12 @@ export default function FileManager() {
                     </div>
                   ) : files.length === 0 ? (
                     <div className="text-center py-12">
-                      <Folder size={48} className="text-white/20 mx-auto mb-3" />
+                      <div className="w-12 h-12 mx-auto mb-3 opacity-20">
+                        <img
+                          src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                          alt="Folder"
+                        />
+                      </div>
                       <p className="text-white/40">No files yet</p>
                       <p className="text-xs text-white/30 mt-2">Upload files or create folders to begin</p>
                     </div>
@@ -1014,7 +1057,12 @@ export default function FileManager() {
                             onClick={() => file.isDirectory ? navigateToFolder(file.path) : handleImagePreview(file)}
                           >
                             {file.isDirectory ? (
-                              <Folder size={40} className="text-amber-400" />
+                              <div className="batarang-icon" style={{ width: '40px', height: '40px' }}>
+                                <img
+                                  src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                                  alt="Folder"
+                                />
+                              </div>
                             ) : isImageFile(file.name) ? (
                               <img 
                                 src={`/api/download?path=${encodeURIComponent(file.path)}`}

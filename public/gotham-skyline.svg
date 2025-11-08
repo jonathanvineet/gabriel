@@ -1,0 +1,98 @@
+<svg viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+  <!-- Sky gradient background -->
+  <defs>
+    <linearGradient id="skyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a1a;stop-opacity:1" />
+      <stop offset="30%" style="stop-color:#1a1a3a;stop-opacity:1" />
+      <stop offset="60%" style="stop-color:#0f1a2a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0a0a0a;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Sky -->
+  <rect width="1920" height="1080" fill="url(#skyGradient)"/>
+
+  <!-- Far buildings (darkest, furthest back) -->
+  <rect x="0" y="600" width="120" height="480" fill="#0d0d0d"/>
+  <rect x="150" y="550" width="100" height="530" fill="#0a0a0a"/>
+  <rect x="300" y="580" width="90" height="500" fill="#0d0d0d"/>
+  <rect x="430" y="620" width="80" height="460" fill="#0a0a0a"/>
+  <rect x="550" y="590" width="110" height="490" fill="#0d0d0d"/>
+  <rect x="710" y="560" width="95" height="520" fill="#0a0a0a"/>
+  <rect x="850" y="610" width="85" height="470" fill="#0d0d0d"/>
+  <rect x="980" y="570" width="100" height="510" fill="#0a0a0a"/>
+  <rect x="1130" y="600" width="90" height="480" fill="#0d0d0d"/>
+  <rect x="1260" y="550" width="110" height="530" fill="#0a0a0a"/>
+  <rect x="1420" y="590" width="95" height="490" fill="#0d0d0d"/>
+  <rect x="1560" y="570" width="100" height="510" fill="#0a0a0a"/>
+  <rect x="1710" y="610" width="85" height="470" fill="#0d0d0d"/>
+  <rect x="1840" y="580" width="80" height="500" fill="#0a0a0a"/>
+
+  <!-- Mid-range buildings -->
+  <rect x="50" y="650" width="130" height="430" fill="#1a1a1a"/>
+  <rect x="220" y="620" width="110" height="460" fill="#1a1a1a"/>
+  <rect x="380" y="680" width="95" height="400" fill="#1a1a1a"/>
+  <rect x="520" y="640" width="120" height="440" fill="#1a1a1a"/>
+  <rect x="700" y="670" width="100" height="410" fill="#1a1a1a"/>
+  <rect x="850" y="630" width="125" height="450" fill="#1a1a1a"/>
+  <rect x="1040" y="660" width="105" height="420" fill="#1a1a1a"/>
+  <rect x="1200" y="640" width="115" height="440" fill="#1a1a1a"/>
+  <rect x="1370" y="650" width="100" height="430" fill="#1a1a1a"/>
+  <rect x="1520" y="670" width="110" height="410" fill="#1a1a1a"/>
+  <rect x="1700" y="630" width="95" height="450" fill="#1a1a1a"/>
+
+  <!-- Foreground buildings (tallest, closest) -->
+  <rect x="100" y="500" width="150" height="580" fill="#2a2a2a"/>
+  <rect x="320" y="480" width="140" height="600" fill="#2a2a2a"/>
+  <rect x="540" y="520" width="145" height="560" fill="#2a2a2a"/>
+  <rect x="760" y="490" width="135" height="590" fill="#2a2a2a"/>
+  <rect x="970" y="530" width="150" height="550" fill="#2a2a2a"/>
+  <rect x="1200" y="500" width="140" height="580" fill="#2a2a2a"/>
+  <rect x="1420" y="510" width="155" height="570" fill="#2a2a2a"/>
+  <rect x="1650" y="490" width="140" height="590" fill="#2a2a2a"/>
+
+  <!-- Window lights (small yellow dots) -->
+  <circle cx="130" cy="580" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="145" cy="600" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="115" cy="620" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+  <circle cx="140" cy="540" r="2.5" fill="#ffd700" opacity="0.4"/>
+
+  <circle cx="350" cy="550" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="370" cy="570" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="340" cy="590" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+
+  <circle cx="580" cy="600" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="600" cy="620" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="570" cy="560" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+
+  <circle cx="790" cy="570" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="810" cy="590" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="780" cy="610" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+
+  <circle cx="1010" cy="620" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="1030" cy="640" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="1000" cy="560" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+
+  <circle cx="1240" cy="580" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="1260" cy="600" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="1230" cy="620" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+
+  <circle cx="1460" cy="560" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="1480" cy="580" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="1450" cy="600" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+
+  <circle cx="1690" cy="610" r="3" fill="#ffd700" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="1710" cy="630" r="2.5" fill="#ffd700" opacity="0.5"/>
+  <circle cx="1680" cy="560" r="3" fill="#ffd700" opacity="0.7" filter="url(#glow)"/>
+
+  <!-- Bat-Signal inspired element -->
+  <circle cx="1900" cy="250" r="80" fill="none" stroke="#ffd700" stroke-width="2" opacity="0.3"/>
+  <path d="M 1900 200 L 1920 220 L 1900 250 L 1880 220 Z" fill="#ffd700" opacity="0.2" filter="url(#glow)"/>
+</svg>
