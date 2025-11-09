@@ -16,43 +16,49 @@
   --glass-shadow: rgba(0, 0, 0, 0.5);
 }
 
-body {
-  background-color: #0a0a0a;
-  background-image: url('https://images8.alphacoders.com/108/1081179.jpg');
-  background-attachment: fixed;
-  background-size: cover;
-  background-position: center center;
-  background-repeat: no-repeat;
-  color: var(--foreground);
-  font-family: var(--font-geist-sans);
-  min-height: 100vh;
-  min-width: 100vw;
-  position: relative;
-  overflow-x: hidden;
-  margin: 0;
-  padding: 0;
-}
-
 html {
   width: 100%;
   height: 100%;
   margin: 0;
   padding: 0;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-body::before {
-  content: '';
+body {
+  background-color: #0a0a0a;
+  color: var(--foreground);
+  font-family: var(--font-geist-sans);
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  overflow-x: hidden;
   position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+
+.content-wrapper {
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  width: 100vw;
-  height: 100vh;
-  background: linear-gradient(135deg, rgba(10, 15, 25, 0.65) 0%, rgba(15, 20, 30, 0.55) 50%, rgba(10, 15, 25, 0.65) 100%);
-  backdrop-filter: blur(0px);
-  pointer-events: none;
-  z-index: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  height: 100%;
+  width: 100%;
+}
+
+.fixed-background {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  perspective: 1000;
+  -webkit-perspective: 1000;
 }
 
 /* Glass morphism cards - iOS 18+ style */

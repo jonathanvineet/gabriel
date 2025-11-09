@@ -27,7 +27,26 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <div 
+          className="fixed-background"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            backgroundImage: 'url(/images/background.jpg)',
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            zIndex: -2,
+            transform: 'translate3d(0,0,0)',
+            WebkitTransform: 'translate3d(0,0,0)',
+            WebkitOverflowScrolling: 'touch',
+          }}
+        />
+        <div className="content-wrapper" style={{ position: 'relative', zIndex: 1 }}>
+          {children}
+        </div>
       </body>
     </html>
   );

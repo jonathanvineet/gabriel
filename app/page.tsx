@@ -662,12 +662,12 @@ export default function FileManager() {
   }, [files]);
 
   return (
-    <div className="min-h-screen relative">
+    <div className="min-h-screen relative z-0">
       {(loading || uploading) && loadingMessage && (
         <LoadingScreen message={loadingMessage} percent={uploading ? uploadPercent : 50} />
       )}
 
-      <div className="container mx-auto px-6 py-8 max-w-7xl relative z-10">
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-8 max-w-7xl relative z-10">
         
         {/* Modern Dashboard */}
         <div className="mb-8">
@@ -676,7 +676,15 @@ export default function FileManager() {
             <div>
               <h1 className="text-6xl font-black mb-2">
                 <span className="text-white">Hello, </span>
-                <span className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 bg-clip-text text-transparent">
+                <span 
+                  className="text-amber-400"
+                  style={{
+                    background: 'linear-gradient(to right, #fbbf24, #fcd34d, #fbbf24)',
+                    WebkitBackgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    backgroundClip: 'text'
+                  }}
+                >
                   Batman
                 </span>
               </h1>
@@ -902,7 +910,7 @@ export default function FileManager() {
                 <div className="text-center py-12">
                   <div className="w-12 h-12 mx-auto mb-3 opacity-20">
                     <img
-                      src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                      src="/images/batman-logo.png"
                       alt="Folder"
                     />
                   </div>
@@ -916,7 +924,7 @@ export default function FileManager() {
                         {file.isDirectory ? (
                           <div className="batarang-icon" style={{ width: '32px', height: '32px' }}>
                             <img
-                              src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                              src="/images/batman-logo.png"
                               alt="Folder"
                             />
                           </div>
@@ -1081,7 +1089,7 @@ export default function FileManager() {
                     <div className="text-center py-12">
                       <div className="w-12 h-12 mx-auto mb-3 opacity-20">
                         <img
-                          src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                          src="/images/batman-logo.png"
                           alt="Folder"
                         />
                       </div>
@@ -1100,7 +1108,7 @@ export default function FileManager() {
                             {file.isDirectory ? (
                               <div className="batarang-icon" style={{ width: '40px', height: '40px' }}>
                                 <img
-                                  src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+                                  src="public/images/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-logo-removebg-preview.png"
                                   alt="Folder"
                                 />
                               </div>

@@ -1,22 +1,103 @@
 import { spawn, ChildProcess } from 'child_process';
+import { execSync } from 'child_process';
 
 // Shared FFmpeg process
 let sharedFFmpegProcess: ChildProcess | null = null;
 let lastFrame: Buffer | null = null;
 let frameSubscribers = 0;
 let restartTimeout: NodeJS.Timeout | null = null;
+let detectedCameraIndex: string | null = null;
+
+// Track active connections with timestamps
+const activeConnections = new Map<number, number>();
+let connectionIdCounter = 0;
+
+// Cleanup stale connections every 2 seconds
+setInterval(() => {
+  const now = Date.now();
+  const staleThreshold = 30000; // 30 seconds
+  
+  for (const [id, lastActivity] of activeConnections.entries()) {
+    if (now - lastActivity > staleThreshold) {
+      console.log(`🧹 Cleaning up stale connection ${id}`);
+      activeConnections.delete(id);
+      frameSubscribers = Math.max(0, frameSubscribers - 1);
+    }
+  }
+}, 2000);
+
+// Detect webcam device
+function detectWebcam(): string | null {
+  if (detectedCameraIndex !== null) {
+    return detectedCameraIndex;
+  }
+
+  try {
+    console.log('🔍 Detecting webcam...');
+    execSync('ffmpeg -f avfoundation -list_devices true -i ""', { 
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    // Parse won't work because output is on stderr, so we catch it
+  } catch (error: unknown) {
+    const errorOutput = error as { stderr?: string; stdout?: string };
+    const output = errorOutput.stderr || errorOutput.stdout || '';
+    console.log('Camera detection output:', output);
+    
+    // Look for Logitech/USB webcam FIRST (higher priority than FaceTime)
+    const lines = output.split('\n');
+    for (const line of lines) {
+      // Prioritize Logitech webcam
+      const logiMatch = line.match(/\[(\d+)\].*(?:Logitech|C110|C920|C922|Webcam)/i);
+      if (logiMatch) {
+        detectedCameraIndex = logiMatch[1];
+        console.log(`✅ Found Logitech webcam at index: ${detectedCameraIndex}`);
+        console.log(`   Device: ${line.trim()}`);
+        return detectedCameraIndex;
+      }
+    }
+    
+    // If no Logitech found, look for any external camera (not FaceTime)
+    for (const line of lines) {
+      if (line.includes('[') && line.includes(']') && !line.toLowerCase().includes('facetime')) {
+        const match = line.match(/\[(\d+)\]/);
+        if (match) {
+          detectedCameraIndex = match[1];
+          console.log(`✅ Found external camera at index: ${detectedCameraIndex}`);
+          console.log(`   Device: ${line.trim()}`);
+          return detectedCameraIndex;
+        }
+      }
+    }
+    
+    // Last resort: try index 1 (usually USB on Mac)
+    console.warn('⚠️ Could not auto-detect USB webcam, defaulting to index 1');
+    detectedCameraIndex = '1';
+    return detectedCameraIndex;
+  }
+  
+  return null;
+}
 
 // Start shared FFmpeg process
 function startSharedFFmpeg() {
   if (sharedFFmpegProcess) return;
   
-  console.log('🎥 Starting shared FFmpeg process...');
+  const cameraIndex = detectWebcam();
+  if (cameraIndex === null) {
+    console.error('❌ No webcam detected!');
+    return;
+  }
   
+  console.log(`🎥 Starting shared FFmpeg process with camera index ${cameraIndex}...`);
+  
+  // Use 1024x768 for Logitech C110 webcam (widely supported by USB webcams)
   sharedFFmpegProcess = spawn('ffmpeg', [
     '-f', 'avfoundation',
     '-framerate', '30',
     '-video_size', '1024x768',
-    '-i', '0',
+    '-i', cameraIndex,
     '-f', 'image2pipe',
     '-vcodec', 'mjpeg',
     '-q:v', '3',
@@ -88,8 +169,18 @@ export async function GET() {
   const boundary = 'FRAME';
   const encoder = new TextEncoder();
   
+  // Limit maximum concurrent subscribers
+  if (frameSubscribers >= 10) {
+    console.warn(`⚠️  Too many subscribers (${frameSubscribers}), rejecting new connection`);
+    return new Response('Too many connections', { status: 503 });
+  }
+  
+  // Assign unique ID to this connection
+  const connectionId = ++connectionIdCounter;
+  activeConnections.set(connectionId, Date.now());
+  
   frameSubscribers++;
-  console.log(`📱 Client connected. Active subscribers: ${frameSubscribers}`);
+  console.log(`📱 Client ${connectionId} connected. Active subscribers: ${frameSubscribers}`);
   
   // Clear any pending stop
   if (restartTimeout) {
@@ -115,6 +206,7 @@ export async function GET() {
           controller.enqueue(new Uint8Array(lastFrame));
           controller.enqueue(encoder.encode('\r\n'));
           lastSentFrame = lastFrame;
+          activeConnections.set(connectionId, Date.now()); // Update activity
         } catch (err) {
           console.error('Error sending initial frame:', err);
         }
@@ -135,7 +227,8 @@ export async function GET() {
             controller.enqueue(new Uint8Array(lastFrame));
             controller.enqueue(encoder.encode('\r\n'));
             lastSentFrame = lastFrame;
-          } catch (err) {
+            activeConnections.set(connectionId, Date.now()); // Update activity timestamp
+          } catch {
             // Client disconnected
             active = false;
             clearInterval(sendFrames);
@@ -144,18 +237,27 @@ export async function GET() {
       }, 50); // 20 FPS for better compatibility
 
       // Store cleanup function
-      (controller as any).cleanup = () => {
+      const cleanup = () => {
+        if (!active) return; // Already cleaned up
         active = false;
         clearInterval(sendFrames);
-        frameSubscribers--;
-        console.log(`👋 Client disconnected. Active subscribers: ${frameSubscribers}`);
+        
+        // Remove from tracking
+        if (activeConnections.delete(connectionId)) {
+          frameSubscribers = Math.max(0, frameSubscribers - 1);
+          console.log(`👋 Client ${connectionId} disconnected. Active subscribers: ${frameSubscribers}`);
+        }
+        
         scheduleFFmpegStop();
       };
+
+      // Attach cleanup to controller
+      (controller as { cleanup?: () => void }).cleanup = cleanup;
     },
 
     cancel() {
-      const cleanup = (this as any).cleanup;
-      if (cleanup) cleanup();
+      const ctrl = this as { cleanup?: () => void };
+      if (ctrl.cleanup) ctrl.cleanup();
     }
   });
 

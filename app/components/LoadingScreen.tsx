@@ -9,7 +9,7 @@ export default function LoadingScreen({ message, percent }: LoadingScreenProps) 
       <div className="loading-content">
         <div className="loading-logo batarang-spinner batarang-glow">
           <img
-            src="https://w7.pngwing.com/pngs/136/855/png-transparent-batman-superman-injustice-2-comics-batman-comics-heroes-batman-comics-heroes-logo.png"
+            src="/images/batarang-logo.png"
             alt="Batman Batarang"
           />
         </div>
