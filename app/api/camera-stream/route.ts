@@ -85,30 +85,49 @@ function detectWebcam(): string | null {
       const lines = output.split('\n');
       console.log(`📋 Parsing ${lines.length} lines of output...`);
       
+      let fallbackCamera: string | null = null;
+      let fallbackCameraName: string | null = null;
+      
       for (const line of lines) {
-        // Look for video devices containing C110 or Logitech
+        // Look for video devices
         if (line.includes('"') && line.includes('(video)')) {
           console.log(`🎥 Found video line: ${line.trim()}`);
           const match = line.match(/"([^"]+)"/);
           if (match) {
-            detectedCameraName = match[1];
-            detectedCameraIndex = `video=${detectedCameraName}`;
-            console.log(`✅ Detected camera: ${detectedCameraName}`);
+            const cameraName = match[1];
+            console.log(`📹 Detected camera: ${cameraName}`);
             
-            // Prefer C110 or Logitech webcams
-            if (detectedCameraName.toLowerCase().includes('c110') || 
-                detectedCameraName.toLowerCase().includes('logitech') ||
-                detectedCameraName.toLowerCase().includes('webcam')) {
-              console.log(`🎯 Using preferred camera: ${detectedCameraName}`);
+            // HIGHEST PRIORITY: C110 or Logitech webcams
+            if (cameraName.toLowerCase().includes('c110') || 
+                cameraName.toLowerCase().includes('logitech')) {
+              detectedCameraName = cameraName;
+              detectedCameraIndex = `video=${detectedCameraName}`;
+              console.log(`🎯 Using Logitech/C110 camera: ${detectedCameraName}`);
               return detectedCameraIndex;
+            }
+            
+            // Save as fallback if it's a webcam (but not HP)
+            if (!fallbackCamera && 
+                cameraName.toLowerCase().includes('webcam') && 
+                !cameraName.toLowerCase().includes('hp')) {
+              fallbackCamera = `video=${cameraName}`;
+              fallbackCameraName = cameraName;
+            }
+            
+            // Last resort fallback - any video device
+            if (!fallbackCamera) {
+              fallbackCamera = `video=${cameraName}`;
+              fallbackCameraName = cameraName;
             }
           }
         }
       }
       
-      // If we found any video device, use it
-      if (detectedCameraIndex) {
-        console.log(`✅ Using video device: ${detectedCameraName}`);
+      // Use fallback if we found one
+      if (fallbackCamera) {
+        detectedCameraIndex = fallbackCamera;
+        detectedCameraName = fallbackCameraName;
+        console.log(`✅ Using fallback video device: ${fallbackCameraName}`);
         return detectedCameraIndex;
       }
       
@@ -189,17 +208,28 @@ function startSharedFFmpeg() {
   let ffmpegArgs: string[];
   
   if (isWindows) {
-    // Windows DirectShow
+    // Windows DirectShow - device name format is critical
+    // Remove 'video=' prefix if present and rebuild with proper format
+    let deviceName = cameraIndex;
+    if (deviceName.startsWith('video=')) {
+      deviceName = deviceName.substring(6); // Remove 'video=' prefix
+    }
+    
+    console.log(`🔧 Using device name: "${deviceName}"`);
+    
+    // C110 supports MJPEG at 1024x768 natively - use it directly!
     ffmpegArgs = [
       '-f', 'dshow',
-      '-framerate', '30',
-      '-video_size', '1024x768',
-      '-i', cameraIndex, // format: "video=Camera Name"
-      '-f', 'image2pipe',
       '-vcodec', 'mjpeg',
-      '-q:v', '3',
+      '-video_size', '1024x768',
+      '-framerate', '30',
+      '-i', `video=${deviceName}`,
+      '-f', 'image2pipe',
+      '-vcodec', 'copy', // Copy MJPEG directly, no re-encoding needed
       '-',
     ];
+    
+    console.log(`📝 FFmpeg command: ffmpeg ${ffmpegArgs.join(' ')}`);
   } else if (isMac) {
     // macOS AVFoundation
     ffmpegArgs = [
@@ -257,9 +287,18 @@ function startSharedFFmpeg() {
   });
 
   sharedFFmpegProcess.stderr?.on('data', (data: Buffer) => {
-    const msg = data.toString();
-    if (!msg.includes('frame=') && !msg.includes('fps=')) {
-      console.log('FFmpeg:', msg.trim());
+    const msg = data.toString().trim();
+    // Only log actual errors or warnings, not frame stats or empty lines
+    if (msg && 
+        !msg.includes('frame=') && 
+        !msg.includes('fps=') && 
+        !msg.includes('bitrate=') &&
+        !msg.includes('speed=') &&
+        msg.length > 10 &&
+        (msg.toLowerCase().includes('error') || 
+         msg.toLowerCase().includes('warning') ||
+         msg.toLowerCase().includes('failed'))) {
+      console.log('FFmpeg:', msg);
     }
   });
 
