@@ -24,10 +24,58 @@ export async function GET(request: NextRequest) {
     }
 
     if (!fs.existsSync(fullPath)) {
-      return NextResponse.json({ error: 'Directory not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Path not found' }, { status: 404 });
     }
 
-    // Use async readdir for better performance
+    // Check if it's a file or directory
+    const stats = await fs.promises.stat(fullPath);
+    
+    // If it's a file, serve it directly with optimizations
+    if (stats.isFile()) {
+      const ext = path.extname(fullPath).toLowerCase();
+      
+      // Set appropriate content type
+      const contentTypes: Record<string, string> = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
+        '.pdf': 'application/pdf',
+        '.txt': 'text/plain',
+        '.json': 'application/json',
+      };
+      
+      const contentType = contentTypes[ext] || 'application/octet-stream';
+      
+      // Use streaming for large files (>1MB)
+      if (stats.size > 1024 * 1024) {
+        const stream = fs.createReadStream(fullPath);
+        return new NextResponse(stream as any, {
+          headers: {
+            'Content-Type': contentType,
+            'Content-Length': stats.size.toString(),
+            'Cache-Control': 'public, max-age=31536000, immutable',
+            'ETag': `"${stats.mtimeMs}-${stats.size}"`,
+          },
+        });
+      }
+      
+      // For small files, read into buffer
+      const fileBuffer = await fs.promises.readFile(fullPath);
+      
+      return new NextResponse(fileBuffer, {
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': fileBuffer.length.toString(),
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'ETag': `"${stats.mtimeMs}-${stats.size}"`,
+        },
+      });
+    }
+
+    // If it's a directory, list contents
     const items = await fs.promises.readdir(fullPath);
     
     // Process files in parallel batches for speed

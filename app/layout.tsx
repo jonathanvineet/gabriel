@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "@/lib/startup"; // Initialize server on startup
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GABRIEL - Your Secure Storage Vault",
-  description: "Secure, fast, and organized file storage solution",
+  title: "Micheal - Your Secure Storage Vault",
+  description: "Secure, fast, and organized file storage solution with AI-powered image search",
 };
 
 export default function RootLayout({

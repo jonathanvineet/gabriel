@@ -3,6 +3,7 @@
 import { useState, useEffect, DragEvent } from 'react';
 import { Upload, FolderPlus, Download, Trash2, Folder, File, Home, ChevronRight, Loader2, FileText, FileCode, Film, Music, Archive, Image as ImageIcon, Eye, ArrowLeft, Cloud, CloudRain, CloudSnow, Sun, CloudDrizzle, Wind, Camera, Clock, HardDrive, MessageSquare } from 'lucide-react';
 import LoadingScreen from './components/LoadingScreen';
+import LazyImageSearch from '@/components/LazyImageSearch';
 
 interface FileItem {
   name: string;
@@ -118,10 +119,15 @@ export default function FileManager() {
     setLoading(true);
     setLoadingMessage(loadingMessages.files);
     try {
-      const response = await fetch(`/api/files?path=${encodeURIComponent(currentPath)}`);
+      // Add cache-busting to force fresh data
+      const timestamp = Date.now();
+      const response = await fetch(`/api/files?path=${encodeURIComponent(currentPath)}&_t=${timestamp}`, {
+        cache: 'no-store'
+      });
       const data = await response.json();
       if (data.files) {
         setFiles(data.files);
+        console.log(`📁 Loaded ${data.files.length} files from ${currentPath || 'root'}`);
       }
     } catch (error) {
       console.error('Error loading files:', error);
@@ -261,8 +267,24 @@ export default function FileManager() {
       }
       
       updateProgress(100, 'All files uploaded successfully!');
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      loadFiles();
+      
+      // Wait for files to be fully written to disk
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Force refresh file list
+      console.log('🔄 Refreshing file list...');
+      await loadFiles();
+      console.log('✅ File list refreshed');
+      
+      // Trigger automatic image scan for new uploads
+      updateProgress(100, 'Scanning new images with AI...');
+      try {
+        await fetch('/api/images/scan', { method: 'POST' });
+        console.log('✨ Auto-scan triggered for new images');
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for scan to start
+      } catch (error) {
+        console.error('Auto-scan failed:', error);
+      }
     } catch (error) {
       console.error('Error uploading files:', error);
       alert('Failed to upload files');
@@ -621,12 +643,29 @@ export default function FileManager() {
         );
       }
       
-      updateProgress(100, `All ${totalFiles} files uploaded successfully!`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      loadFiles();
+      updateProgress(100, 'Upload complete!');
+      
+      // Wait for file to be fully written
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Force refresh file list
+      console.log('🔄 Refreshing file list...');
+      await loadFiles();
+      console.log('✅ File list refreshed');
+      
+      // Trigger automatic image scan for new upload
+      try {
+        await fetch('/api/images/scan', { method: 'POST' });
+        console.log('✨ Auto-scan triggered for new image');
+      } catch (error) {
+        console.error('Auto-scan failed:', error);
+      }
+      
+      return true;
     } catch (error) {
-      console.error('Error uploading files:', error);
-      alert('Failed to upload files');
+      console.error('Error uploading file:', error);
+      alert('Failed to upload file');
+      return false;
     } finally {
       setUploading(false);
       setUploadProgress('');
@@ -1013,7 +1052,7 @@ export default function FileManager() {
 
                   <label className={`px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-xl border border-blue-400/30 hover:border-blue-400/50 transition-all text-sm font-medium ${uploading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
                     <Upload size={14} className="inline mr-1.5" />Upload
-                    <input type="file" onChange={handleFileInputChange} className="hidden" disabled={uploading} />
+                    <input type="file" multiple onChange={handleFileInputChange} className="hidden" disabled={uploading} />
                   </label>
 
                   <button
@@ -1059,6 +1098,11 @@ export default function FileManager() {
                     </span>
                   ))}
                 </div>
+              </div>
+
+              {/* AI-Powered Image Search */}
+              <div className="bg-black/20 border-b border-white/10 p-4">
+                <LazyImageSearch />
               </div>
 
               {/* Drop Zone & File List - Grid Layout */}
