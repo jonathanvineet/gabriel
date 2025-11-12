@@ -23,7 +23,7 @@
 		2A000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2A000006 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		3A000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		8A000001 /* Gabriel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Gabriel.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8A000001 /* Micheal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Micheal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -40,12 +40,12 @@
 		5A000001 = {
 			isa = PBXGroup;
 			children = (
-				5A000002 /* GabrielApp */,
+				5A000002 /* MichealApp */,
 				5A000003 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		5A000002 /* GabrielApp */ = {
+		5A000002 /* MichealApp */ = {
 			isa = PBXGroup;
 			children = (
 				2A000001 /* App.swift */,
@@ -56,13 +56,13 @@
 				2A000006 /* LaunchScreen.storyboard */,
 				3A000001 /* Info.plist */,
 			);
-			path = GabrielApp;
+			path = MichealApp;
 			sourceTree = "<group>";
 		};
 		5A000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				8A000001 /* Gabriel.app */,
+				8A000001 /* Micheal.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,9 +70,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		6A000001 /* Gabriel */ = {
+		6A000001 /* Micheal */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 7A000001 /* Build configuration list for PBXNativeTarget "Gabriel" */;
+			buildConfigurationList = 7A000001 /* Build configuration list for PBXNativeTarget "Micheal" */;
 			buildPhases = (
 				4A000002 /* Sources */,
 				4A000001 /* Frameworks */,
@@ -82,9 +82,9 @@
 			);
 			dependencies = (
 			);
-			name = Gabriel;
-			productName = Gabriel;
-			productReference = 8A000001 /* Gabriel.app */;
+			name = Micheal;
+			productName = Micheal;
+			productReference = 8A000001 /* Micheal.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -102,7 +102,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 0A000001 /* Build configuration list for PBXProject "Gabriel" */;
+			buildConfigurationList = 0A000001 /* Build configuration list for PBXProject "Micheal" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -115,7 +115,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				6A000001 /* Gabriel */,
+				6A000001 /* Micheal */,
 			);
 		};
 /* End PBXProject section */
@@ -275,18 +275,18 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3U2SL4BUT9;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = GabrielApp/Info.plist;
+				INFOPLIST_FILE = MichealApp/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.vj.gabriel;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vj.micheal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -303,18 +303,18 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3U2SL4BUT9;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = GabrielApp/Info.plist;
+				INFOPLIST_FILE = MichealApp/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 15.6;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.vj.gabriel;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vj.micheal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -325,7 +325,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		0A000001 /* Build configuration list for PBXProject "Gabriel" */ = {
+		0A000001 /* Build configuration list for PBXProject "Micheal" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				0A000002 /* Debug */,
@@ -334,7 +334,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		7A000001 /* Build configuration list for PBXNativeTarget "Gabriel" */ = {
+		7A000001 /* Build configuration list for PBXNativeTarget "Micheal" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				7A000002 /* Debug */,
