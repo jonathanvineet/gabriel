@@ -1,0 +1,273 @@
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color(UIColor.systemGroupedBackground).ignoresSafeArea()
+                if store.documents.isEmpty { emptyStateView } else { drawingsGridView }
+            }
+            .navigationTitle("Whiteboards")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { Button("Done") { presentationMode.wrappedValue.dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) { Button { showNewDocSheet = true } label: { Image(systemName: "plus") } }
+            }
+            .sheet(isPresented: $showNewDocSheet) { createNewDocumentSheet }
+            .background(
+                NavigationLink(
+                    destination: Group {
+                        if let id = selectedDocID, let index = store.documents.firstIndex(where: { $0.id == id }) {
+                            DrawingEditorView(document: $store.documents[index])
+                        }
+                    },
+                    isActive: Binding(get: { selectedDocID != nil }, set: { isActive in if !isActive { selectedDocID = nil } }),
+                    label: { EmptyView() }
+                )
+            )
+        }
+        .accentColor(.yellow).environmentObject(store).onAppear { store.loadDocuments() }
+    }
+    private var drawingsGridView: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 16)], spacing: 16) {
+                ForEach(store.documents) { doc in
+                    Button(action: { selectedDocID = doc.id }) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            DrawingPreview(document: doc)
+                                .aspectRatio(4/3, contentMode: .fit)
+                                .background(Color.secondary.opacity(0.1))
+                                .cornerRadius(12)
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.2)))
+
+                            Text(doc.name).font(.headline).foregroundColor(.primary).lineLimit(1)
+                            Text(doc.modifiedAt, style: .relative).font(.caption2).foregroundColor(.secondary)
+                        }
+                    }
+                    .contextMenu {
+                        Button(role: .destructive, action: { store.delete(document: doc) }) {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+
+    private var emptyStateView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "scribble.variable").font(.system(size: 60)).foregroundColor(.gray)
+            Text("No Whiteboards").font(.title.bold())
+            Text("Tap the + button to create a new one.").font(.subheadline).foregroundColor(.gray)
+        }
+    }
+
+    private var createNewDocumentSheet: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Whiteboard Name")) {
+                    TextField("My Awesome Drawing", text: $newDocName)
+                }
+                Button("Create") {
+                    let newDoc = store.createDocument(name: newDocName.isEmpty ? "Untitled" : newDocName)
+                    newDocName = ""
+                    showNewDocSheet = false
+                    selectedDocID = newDoc.id
+                }
+                .disabled(newDocName.isEmpty)
+            }
+            .navigationTitle("New Whiteboard")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showNewDocSheet = false; newDocName = "" }
+                }
+            }
+        }
+    }
+}
+
+// MARK: Drawing Preview
+@available(iOS 15.0, *)
+struct DrawingPreview: View {
+    let document: DrawingDocument
+
+    var body: some View {
+        Canvas { context, size in
+            let allPoints = document.paths.flatMap { $0.points }
+            guard let boundingBox = allPoints.boundingBox() else { return }
+
+            let drawingSize = boundingBox.size
+            guard drawingSize.width > 0, drawingSize.height > 0 else { return }
+            
+            let scale = Swift.min(size.width / drawingSize.width, size.height / drawingSize.height)
+            let offset = CGPoint(x: (size.width - drawingSize.width * scale) / 2, y: (size.height - drawingSize.height * scale) / 2)
+
+            context.translateBy(x: offset.x, y: offset.y)
+            context.scaleBy(x: scale, y: scale)
+            context.translateBy(x: -boundingBox.origin.x, y: -boundingBox.origin.y)
+
+            for path in document.paths {
+                guard !path.points.isEmpty else { continue }
+                var p = Path()
+                p.addLines(path.points)
+                context.stroke(p, with: .color(path.color), style: StrokeStyle(lineWidth: path.lineWidth / scale, lineCap: .round, lineJoin: .round))
+            }
+        }
+        .clipped()
+    }
+}
+
+// MARK: Drawing Editor
+@available(iOS 15.0, *)
+struct DrawingEditorView: View {
+    @Binding var document: DrawingDocument
+    @Environment(\.presentationMode) var presentationMode
+    @EnvironmentObject private var store: DrawingStore
+    @State private var currentPath = DrawingPath()
+    @State private var selectedColor: Color = .white
+    @State private var selectedLineWidth: CGFloat = 3.0
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    private let availableColors: [Color] = [.white, .red, .green, .blue, .yellow, .orange, .purple]
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.1, green: 0.1, blue: 0.12).ignoresSafeArea()
+            DrawingCanvas(paths: $document.paths, currentPath: $currentPath, scale: $scale, lastScale: $lastScale, offset: $offset, lastOffset: $lastOffset)
+                .ignoresSafeArea()
+            VStack { editorToolbar; Spacer() }
+        }
+        .navigationTitle(document.name).navigationBarTitleDisplayMode(.inline).navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) { Button(action: { presentationMode.wrappedValue.dismiss() }) { HStack { Image(systemName: "chevron.left"); Text("Back") } } }
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button(action: resetView) { Image(systemName: "arrow.counterclockwise") }
+                Button(action: undo) { Image(systemName: "arrow.uturn.backward") }.disabled(document.paths.isEmpty)
+            }
+        }
+        .onDisappear { store.save(document: document) }
+        .onChange(of: selectedColor) { newColor in currentPath.color = newColor }
+        .onChange(of: selectedLineWidth) { newWidth in currentPath.lineWidth = newWidth }
+    }
+    private var editorToolbar: some View {
+        VStack(spacing: 12) {
+            HStack {
+                ForEach(availableColors, id: \.self) { color in
+                    Button(action: { selectedColor = color }) {
+                        Circle().fill(color).frame(width: 30, height: 30)
+                            .overlay(Circle().stroke(Color.white, lineWidth: selectedColor == color ? 2 : 0))
+                    }
+                }
+            }
+            HStack {
+                Image(systemName: "circle.fill").font(.system(size: 8))
+                Slider(value: $selectedLineWidth, in: 1...20)
+                Image(systemName: "circle.fill").font(.system(size: 20))
+            }
+            .foregroundColor(.white).padding(.horizontal)
+        }
+        .padding().background(Color.black.opacity(0.5)).cornerRadius(20).padding(.horizontal)
+        .onChange(of: selectedColor) { newColor in currentPath.color = newColor }
+        .onChange(of: selectedLineWidth) { newWidth in currentPath.lineWidth = newWidth }
+    }
+    private func undo() { if !document.paths.isEmpty { document.paths.removeLast() } }
+    private func resetView() { withAnimation { scale = 1.0; lastScale = 1.0; offset = .zero; lastOffset = .zero } }
+}
+
+// MARK: UIKit Drawing Canvas
+@available(iOS 15.0, *)
+struct DrawingCanvas: UIViewRepresentable {
+    @Binding var paths: [DrawingPath]; @Binding var currentPath: DrawingPath
+    @Binding var scale: CGFloat; @Binding var lastScale: CGFloat; @Binding var offset: CGSize; @Binding var lastOffset: CGSize
+    func makeUIView(context: Context) -> CanvasView {
+        let view = CanvasView(); view.delegate = context.coordinator; view.backgroundColor = .clear; view.isMultipleTouchEnabled = true
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:))); pinch.delegate = context.coordinator; view.addGestureRecognizer(pinch)
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:))); pan.minimumNumberOfTouches = 2; pan.delegate = context.coordinator; view.addGestureRecognizer(pan)
+        return view
+    }
+    func updateUIView(_ uiView: CanvasView, context: Context) { uiView.paths = paths; uiView.currentPath = currentPath; uiView.scale = scale; uiView.offset = offset }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    class Coordinator: NSObject, CanvasViewDelegate, UIGestureRecognizerDelegate {
+        var parent: DrawingCanvas
+        init(_ parent: DrawingCanvas) { self.parent = parent }
+        func didBeginPath(at point: CGPoint) { parent.currentPath.points = [point] }
+        func didAppendToPath(at point: CGPoint) { parent.currentPath.points.append(point) }
+        func didEndPath() { if !parent.currentPath.points.isEmpty { parent.paths.append(parent.currentPath); parent.currentPath = DrawingPath(color: parent.currentPath.color, lineWidth: parent.currentPath.lineWidth) } }
+        @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            switch gesture.state {
+            case .began: parent.lastScale = parent.scale
+            case .changed: let newScale = parent.lastScale * gesture.scale; parent.scale = Swift.max(0.2, Swift.min(newScale, 5.0))
+            case .ended, .cancelled: parent.lastScale = 1.0
+            default: break
+            }
+        }
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            guard gesture.numberOfTouches == 2 else { return }
+            let translation = gesture.translation(in: gesture.view)
+            switch gesture.state {
+            case .began: parent.lastOffset = parent.offset
+            case .changed: parent.offset = CGSize(width: parent.lastOffset.width + translation.x, height: parent.lastOffset.height + translation.y)
+            default: break
+            }
+        }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { return true }
+    }
+}
+
+protocol CanvasViewDelegate: AnyObject { func didBeginPath(at point: CGPoint); func didAppendToPath(at point: CGPoint); func didEndPath() }
+
+class CanvasView: UIView {
+    weak var delegate: CanvasViewDelegate?; var paths: [DrawingPath] = [] { didSet { setNeedsDisplay() } }; var currentPath: DrawingPath? { didSet { setNeedsDisplay() } }
+    var scale: CGFloat = 1.0 { didSet { setNeedsDisplay() } }; var offset: CGSize = .zero { didSet { setNeedsDisplay() } }; private var isDrawing = false
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard event?.allTouches?.count == 1, let touch = touches.first else { isDrawing = false; return }
+        isDrawing = true; let point = touch.location(in: self).transformed(by: transformToCanvas()); delegate?.didBeginPath(at: point)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard isDrawing, let touch = touches.first else { return }
+        let point = touch.location(in: self).transformed(by: transformToCanvas()); delegate?.didAppendToPath(at: point)
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { guard isDrawing else { return }; isDrawing = false; delegate?.didEndPath() }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { guard isDrawing else { return }; isDrawing = false; delegate?.didEndPath() }
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        context.saveGState(); context.translateBy(x: offset.width, y: offset.height); context.scaleBy(x: scale, y: scale)
+        context.setLineCap(.round); context.setLineJoin(.round)
+        for path in paths { draw(path: path, in: context) }
+        if let currentPath = currentPath, isDrawing { draw(path: currentPath, in: context) }
+        context.restoreGState()
+    }
+    private func draw(path: DrawingPath, in context: CGContext) {
+        guard !path.points.isEmpty else { return }
+        context.setLineWidth(path.lineWidth / scale); context.setStrokeColor(UIColor(path.color).cgColor)
+        let cgPath = CGMutablePath(); cgPath.addLines(between: path.points); context.addPath(cgPath); context.strokePath()
+    }
+    private func transformToCanvas() -> CGAffineTransform { return CGAffineTransform.identity.translatedBy(x: -offset.width, y: -offset.height).scaledBy(x: 1 / scale, y: 1 / scale) }
+}
+
+// MARK: - Utility Extensions
+extension Collection where Element == CGPoint {
+    func boundingBox() -> CGRect? {
+        guard let firstPoint = self.first else { return nil }
+        var minX = firstPoint.x, minY = firstPoint.y, maxX = firstPoint.x, maxY = firstPoint.y
+        self.forEach { point in minX = Swift.min(minX, point.x); minY = Swift.min(minY, point.y); maxX = Swift.max(maxX, point.x); maxY = Swift.max(maxY, point.y) }
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+}
+
+extension CGPoint {
+    func transformed(by transform: CGAffineTransform) -> CGPoint { return self.applying(transform) }
+}
+
+struct DocumentPicker: UIViewControllerRepresentable {
+    var onPick: ([URL]) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let vc = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        vc.delegate = context.coordinator
+        return vc
+    }
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+    class Coordinator: NSObject, UIDocumentPickerDelegate { let parent: DocumentPicker; init(_ p: DocumentPicker) { parent = p }; func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) { parent.onPick(urls) } }
+}
+

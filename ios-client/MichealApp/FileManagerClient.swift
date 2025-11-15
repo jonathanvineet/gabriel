@@ -6,8 +6,8 @@ import UniformTypeIdentifiers
 final class FileManagerClient: NSObject {
     static let shared = FileManagerClient()
     
-    // Using ngrok tunnel for remote access
-    private let SERVER_BASE_URL = "https://lcgzvgnv-3000.inc1.devtunnels.ms"
+    // Update this IP address to match your development machine
+    private let SERVER_BASE_URL = "http://100.110.163.52:3000/"
     
     // Public accessor for base URL
     var baseURL: String {
