@@ -7,7 +7,7 @@ final class FileManagerClient: NSObject {
     static let shared = FileManagerClient()
     
     // Update this IP address to match your development machine
-    private let SERVER_BASE_URL = "http://100.110.163.52:3000/"
+    private let SERVER_BASE_URL = "http://100.72.29.66:3000/"
     
     // Public accessor for base URL
     var baseURL: String {
