@@ -212,6 +212,12 @@ class DrawingStore: ObservableObject {
         }
     }
 
+    private func deleteLocally(document: DrawingDocument) {
+        let url = documentsURL.appendingPathComponent("\(document.id).json")
+        try? FileManager.default.removeItem(at: url)
+        documents.removeAll { $0.id == document.id }
+    }
+
     // MARK: - Sync helpers
     // Make syncFromServer public so views can trigger a manual sync (e.g., Sync button)
     func syncFromServer() async {
@@ -220,6 +226,22 @@ class DrawingStore: ObservableObject {
             switch result {
             case .success(let items):
                 print("DrawingStore: syncFromServer - found \(items.count) items on server at path: \(self.serverFolder)")
+                
+                // --- BEGIN DELETION LOGIC ---
+                let remoteFileNames = Set(items.map { $0.name })
+                DispatchQueue.main.async {
+                    let localDocumentsToDelete = self.documents.filter { doc in
+                        let fileName = "\(doc.id).json"
+                        return !remoteFileNames.contains(fileName)
+                    }
+                    
+                    for docToDelete in localDocumentsToDelete {
+                        print("DrawingStore: deleting local document not present on server: \(docToDelete.id).json")
+                        self.deleteLocally(document: docToDelete)
+                    }
+                }
+                // --- END DELETION LOGIC ---
+
                 for item in items where item.name.lowercased().hasSuffix(".json") {
                     print("DrawingStore: remote item: name=\(item.name) path=\(item.path) isDir=\(item.isDirectory)")
                     FileManagerClient.shared.downloadFile(at: item.path) { dlResult in
@@ -361,7 +383,12 @@ struct WhiteboardListView: View {
                 )
             )
         }
-        .accentColor(.yellow).environmentObject(store).onAppear { store.loadDocuments() }
+        .accentColor(.yellow).environmentObject(store).onAppear {
+            store.loadDocuments()
+            Task {
+                await store.syncFromServer()
+            }
+        }
     }
     private var drawingsGridView: some View {
         ScrollView {
