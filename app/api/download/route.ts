@@ -2,7 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
+function resolveUploadsDir(): string {
+  const attempts = [process.cwd(), path.join(process.cwd(), '..'), path.join(process.cwd(), '..', '..')];
+  for (const base of attempts) {
+    const candidate = path.join(base, 'uploads');
+    if (fs.existsSync(candidate)) return path.resolve(candidate);
+  }
+  return path.resolve(process.cwd(), 'uploads');
+}
+
+const UPLOAD_DIR = resolveUploadsDir();
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,10 +22,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'File path is required' }, { status: 400 });
     }
 
-    const fullPath = path.join(UPLOAD_DIR, filePath);
-    
-    // Security check
-    if (!fullPath.startsWith(UPLOAD_DIR)) {
+    // Normalize and resolve path to avoid traversal issues
+    const fullPath = path.resolve(UPLOAD_DIR, filePath);
+
+    // Security check: ensure resolved path is inside UPLOAD_DIR
+    const relative = path.relative(UPLOAD_DIR, fullPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative) && !fullPath.startsWith(UPLOAD_DIR)) {
       return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
     }
 
@@ -38,7 +49,8 @@ export async function GET(request: NextRequest) {
     return new NextResponse(file, {
       headers: {
         'Content-Disposition': `attachment; filename*=UTF-8''${encodedFileName}`,
-        'Content-Type': 'application/octet-stream',
+        // If it's a JSON file, use application/json so clients decode easily.
+        'Content-Type': fileName.toLowerCase().endsWith('.json') ? 'application/json' : 'application/octet-stream',
       },
     });
   } catch (error) {

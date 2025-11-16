@@ -2,6 +2,26 @@ import SwiftUI
 import UIKit
 import CoreGraphics
 
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255, opacity: Double(a) / 255)
+    }
+}
+
 // MARK: - Widget Models
 struct GridPosition: Equatable {
     var row: Int
@@ -53,7 +73,7 @@ struct ScribbleCard: View {
 
 struct DrawingPath: Codable, Identifiable, Equatable {
     var id = UUID()
-    var points: [CGPoint] = []
+        var points: [CGPoint] = []
     var color: Color = .white
     var lineWidth: CGFloat = 3.0
     enum CodingKeys: String, CodingKey { case id, points, color, lineWidth }
@@ -61,10 +81,35 @@ struct DrawingPath: Codable, Identifiable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
-        points = try container.decode([CGPoint].self, forKey: .points)
+            // Points may be encoded in different shapes: either as an array of point objects
+            // or as an array of [x,y] coordinate arrays. Try both.
+            if let decodedPoints = try? container.decode([CGPoint].self, forKey: .points) {
+                points = decodedPoints
+            } else if let coordArrays = try? container.decode([[CGFloat]].self, forKey: .points) {
+                points = coordArrays.compactMap { arr in
+                    guard arr.count >= 2 else { return nil }
+                    return CGPoint(x: arr[0], y: arr[1])
+                }
+            } else if let coordArraysD = try? container.decode([[Double]].self, forKey: .points) {
+                points = coordArraysD.compactMap { arr in
+                    guard arr.count >= 2 else { return nil }
+                    return CGPoint(x: CGFloat(arr[0]), y: CGFloat(arr[1]))
+                }
+            } else {
+                points = []
+            }
         lineWidth = try container.decode(CGFloat.self, forKey: .lineWidth)
-        let colorComponents = try container.decode([CGFloat].self, forKey: .color)
-        if colorComponents.count == 4 { color = Color(.sRGB, red: colorComponents[0], green: colorComponents[1], blue: colorComponents[2], opacity: colorComponents[3]) } else { color = .white }
+        if let colorComponents = try? container.decode([CGFloat].self, forKey: .color) {
+            if colorComponents.count == 4 {
+                color = Color(.sRGB, red: colorComponents[0], green: colorComponents[1], blue: colorComponents[2], opacity: colorComponents[3])
+            } else {
+                color = .white
+            }
+        } else if let hexString = try? container.decode(String.self, forKey: .color) {
+            color = Color(hex: hexString)
+        } else {
+            color = .white
+        }
     }
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -82,24 +127,194 @@ struct DrawingDocument: Codable, Identifiable, Equatable {
 class DrawingStore: ObservableObject {
     @Published var documents: [DrawingDocument] = []
     private var documentsURL: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
-    init() { loadDocuments() }
+    // Server folder where whiteboards are stored
+    private let serverFolder = "whiteboards"
+
+    init() {
+        loadDocuments()
+
+        // Start background sync from server (call main-actor-isolated method from async context)
+        Task { await self.syncFromServer() }
+
+        // Sync on foreground
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
+
+        // Periodic background sync every 60 seconds
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            Task { await self.syncFromServer() }
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self, name: UIApplication.willEnterForegroundNotification, object: nil)
+    }
     func loadDocuments() {
         let fileManager = FileManager.default
         guard let urls = try? fileManager.contentsOfDirectory(at: documentsURL, includingPropertiesForKeys: nil) else { return }
-        self.documents = urls.filter { $0.pathExtension == "json" }.compactMap { url in try? JSONDecoder().decode(DrawingDocument.self, from: Data(contentsOf: url)) }.sorted(by: { $0.modifiedAt > $1.modifiedAt })
+        print("DrawingStore: scanning documents directory: \(documentsURL.path)")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        self.documents = urls.filter { $0.pathExtension == "json" }.compactMap { url in
+            print("DrawingStore: found candidate file: \(url.lastPathComponent)")
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            // Try iso8601 then default
+            if let doc = try? decoder.decode(DrawingDocument.self, from: data) {
+                return doc
+            }
+            if let doc = try? JSONDecoder().decode(DrawingDocument.self, from: data) {
+                return doc
+            }
+            return nil
+        }.sorted(by: { $0.modifiedAt > $1.modifiedAt })
+        print("DrawingStore: loaded \(self.documents.count) documents from disk")
     }
-    func save(document: DrawingDocument) {
+    func save(document: DrawingDocument, upload: Bool = true) {
         var docToSave = document; docToSave.modifiedAt = Date()
         let url = documentsURL.appendingPathComponent("\(docToSave.id).json")
         do {
-            let data = try JSONEncoder().encode(docToSave)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(docToSave)
             try data.write(to: url)
-            if let index = documents.firstIndex(where: { $0.id == docToSave.id }) { documents[index] = docToSave } else { documents.insert(docToSave, at: 0) }
-            documents.sort(by: { $0.modifiedAt > $1.modifiedAt })
+            print("DrawingStore: saved document to \(url.path)")
+            DispatchQueue.main.async {
+                if let index = self.documents.firstIndex(where: { $0.id == docToSave.id }) { self.documents[index] = docToSave } else { self.documents.insert(docToSave, at: 0) }
+                self.documents.sort(by: { $0.modifiedAt > $1.modifiedAt })
+            }
+
+            // Upload to server folder (best-effort)
+            if upload {
+                FileManagerClient.shared.upload(fileURL: url, toPath: serverFolder, progressHandler: nil) { result in
+                    switch result {
+                    case .success():
+                        print("DrawingStore: uploaded whiteboard \(docToSave.id) to server (path: \(self.serverFolder))")
+                    case .failure(let err):
+                        print("DrawingStore: failed to upload whiteboard to server: \(err)")
+                    }
+                }
+            }
         } catch { print("Failed to save document: \(error)") }
     }
     func createDocument(name: String) -> DrawingDocument { let newDoc = DrawingDocument(name: name); save(document: newDoc); return newDoc }
-    func delete(document: DrawingDocument) { let url = documentsURL.appendingPathComponent("\(document.id).json"); try? FileManager.default.removeItem(at: url); documents.removeAll { $0.id == document.id } }
+    func delete(document: DrawingDocument) {
+        let url = documentsURL.appendingPathComponent("\(document.id).json")
+        try? FileManager.default.removeItem(at: url)
+        documents.removeAll { $0.id == document.id }
+
+        // Attempt to delete on server as well
+        let serverPath = "\(serverFolder)/\(document.id).json"
+        FileManagerClient.shared.deleteFile(at: serverPath) { result in
+            switch result {
+            case .success(): print("Deleted whiteboard on server: \(serverPath)")
+            case .failure(let err): print("Failed to delete whiteboard on server: \(err)")
+            }
+        }
+    }
+
+    // MARK: - Sync helpers
+    // Make syncFromServer public so views can trigger a manual sync (e.g., Sync button)
+    func syncFromServer() async {
+        // List JSON files in serverFolder and download/merge
+        FileManagerClient.shared.listFiles(path: serverFolder) { result in
+            switch result {
+            case .success(let items):
+                print("DrawingStore: syncFromServer - found \(items.count) items on server at path: \(self.serverFolder)")
+                for item in items where item.name.lowercased().hasSuffix(".json") {
+                    print("DrawingStore: remote item: name=\(item.name) path=\(item.path) isDir=\(item.isDirectory)")
+                    FileManagerClient.shared.downloadFile(at: item.path) { dlResult in
+                        switch dlResult {
+                        case .success(let localURL):
+                            print("DrawingStore: downloaded remote whiteboard to local temp: \(localURL.path)")
+                            do {
+                                let data = try Data(contentsOf: localURL)
+                                
+                                let processDocument: (DrawingDocument) -> Void = { rdoc in
+                                    DispatchQueue.main.async {
+                                        print("DrawingStore: processing remote doc id=\(rdoc.id) name=\(rdoc.name)")
+                                        if let idx = self.documents.firstIndex(where: { $0.id == rdoc.id }) {
+                                            if rdoc.modifiedAt > self.documents[idx].modifiedAt {
+                                                print("DrawingStore: remote is newer for id=\(rdoc.id) - replacing local")
+                                                self.documents[idx] = rdoc
+                                                self.save(document: rdoc, upload: false)
+                                            } else if rdoc.modifiedAt < self.documents[idx].modifiedAt {
+                                                print("DrawingStore: local is newer for id=\(rdoc.id) - uploading local copy")
+                                                let localURL = self.documentsURL.appendingPathComponent("\(self.documents[idx].id).json")
+                                                FileManagerClient.shared.upload(fileURL: localURL, toPath: self.serverFolder, progressHandler: nil) { _ in }
+                                            } else {
+                                                print("DrawingStore: remote and local have same modifiedAt for id=\(rdoc.id)")
+                                            }
+                                        } else {
+                                            print("DrawingStore: inserting new remote doc id=\(rdoc.id) name=\(rdoc.name)")
+                                            self.documents.insert(rdoc, at: 0)
+                                            self.save(document: rdoc, upload: false)
+                                        }
+                                    }
+                                }
+                                
+                                let decoderISO = JSONDecoder(); decoderISO.dateDecodingStrategy = .iso8601
+                                do {
+                                    let remoteDoc = try decoderISO.decode(DrawingDocument.self, from: data)
+                                    processDocument(remoteDoc)
+                                } catch let error as DecodingError {
+                                    print("!!!!!!!!!! DECODING ERROR (ISO8601) !!!!!!!!!!!")
+                                    self.logDecodingError(error)
+                                    
+                                    // Try fallback decoder
+                                    do {
+                                        let fallbackDecoder = JSONDecoder()
+                                        let remoteDoc = try fallbackDecoder.decode(DrawingDocument.self, from: data)
+                                        processDocument(remoteDoc)
+                                    } catch let fallbackError as DecodingError {
+                                        print("!!!!!!!!!! DECODING ERROR (FALLBACK) !!!!!!!!!!!")
+                                        self.logDecodingError(fallbackError)
+                                        if let jsonString = String(data: data, encoding: .utf8) {
+                                            print("----- RAW JSON -----")
+                                            print(jsonString)
+                                            print("--------------------")
+                                        }
+                                    } catch {
+                                        print("An unexpected error occurred during fallback decoding: \(error)")
+                                    }
+                                } catch {
+                                    print("An unexpected error occurred during ISO8601 decoding: \(error)")
+                                }
+                            } catch {
+                                print("Failed to read data from downloaded file: \(error)")
+                            }
+                        case .failure(let err):
+                            print("Failed to download remote whiteboard: \(err)")
+                        }
+                    }
+                }
+            case .failure(let err):
+                print("Failed to list remote whiteboards: \(err)")
+            }
+        }
+    }
+
+    @objc private func appWillEnterForeground() {
+        Task { await self.syncFromServer() }
+    }
+
+    private func logDecodingError(_ error: DecodingError) {
+        switch error {
+        case .typeMismatch(let type, let context):
+            print("Type mismatch for type \(type) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            print("Debug description: \(context.debugDescription)")
+        case .valueNotFound(let type, let context):
+            print("Value not found for type \(type) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            print("Debug description: \(context.debugDescription)")
+        case .keyNotFound(let key, let context):
+            print("Key not found: \(key.stringValue) at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            print("Debug description: \(context.debugDescription)")
+        case .dataCorrupted(let context):
+            print("Data corrupted at path: \(context.codingPath.map { $0.stringValue }.joined(separator: "."))")
+            print("Debug description: \(context.debugDescription)")
+        @unknown default:
+            print("Unknown decoding error: \(error.localizedDescription)")
+        }
+    }
 }
 
 @available(iOS 15.0, *)
@@ -119,7 +334,17 @@ struct WhiteboardListView: View {
             .navigationTitle("Whiteboards")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { Button("Done") { presentationMode.wrappedValue.dismiss() } }
-                ToolbarItem(placement: .navigationBarTrailing) { Button { showNewDocSheet = true } label: { Image(systemName: "plus") } }
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        Task {
+                            await store.syncFromServer()
+                        }
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+
+                    Button { showNewDocSheet = true } label: { Image(systemName: "plus") }
+                }
             }
             .sheet(isPresented: $showNewDocSheet) { createNewDocumentSheet }
             .background(
@@ -806,10 +1031,9 @@ struct WeatherCard: View {
 // MARK: - Camera Feed Card
 @available(iOS 15.0, *)
 struct CameraFeedCard: View {
-    @StateObject private var mjpegStream = MJPEGStreamView()
+    @ObservedObject private var mjpegStream = MJPEGStreamView.shared
     @Environment(\.scenePhase) var scenePhase
-    @State private var hasStarted = false
-    
+
     var body: some View {
             VStack(spacing: 0) {
                 HStack {
@@ -821,12 +1045,12 @@ struct CameraFeedCard: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
                 .padding(.bottom, 12)
-                
+
                 ZStack {
                     Rectangle()
                         .fill(Color.black)
                         .aspectRatio(16/9, contentMode: .fit)
-                    
+
                     if mjpegStream.isLoading {
                         ProgressView()
                             .tint(.yellow)
@@ -853,7 +1077,7 @@ struct CameraFeedCard: View {
                                 .foregroundColor(.white.opacity(0.5))
                         }
                     }
-                    
+
                     // Live indicator
                     VStack {
                         HStack {
@@ -862,7 +1086,7 @@ struct CameraFeedCard: View {
                                     .fill(mjpegStream.isStreaming ? Color.red : Color.gray)
                                     .frame(width: 8, height: 8)
                                     .shadow(color: mjpegStream.isStreaming ? .red : .clear, radius: 4)
-                                
+
                                 Text(mjpegStream.isStreaming ? "LIVE" : "OFFLINE")
                                     .font(.system(size: 10, weight: .bold))
                                     .foregroundColor(mjpegStream.isStreaming ? .red : .gray)
@@ -878,11 +1102,11 @@ struct CameraFeedCard: View {
                                             .stroke(mjpegStream.isStreaming ? Color.red.opacity(0.5) : Color.gray.opacity(0.5), lineWidth: 1)
                                     )
                             )
-                            
+
                             Spacer()
                         }
                         .padding(16)
-                        
+
                         Spacer()
                     }
                 }
@@ -899,23 +1123,20 @@ struct CameraFeedCard: View {
                     )
             )
             .onAppear {
-                if !hasStarted {
-                    hasStarted = true
+                // Start streaming once when the app/view first appears.
+                if !mjpegStream.isStreaming {
                     mjpegStream.startStreaming(url: "\(FileManagerClient.shared.baseURL)/api/camera-stream")
                 }
-            }
-            .onDisappear {
-                mjpegStream.stopStreaming()
-                hasStarted = false
             }
             .onChange(of: scenePhase) { newPhase in
                 switch newPhase {
                 case .active:
-                    if !mjpegStream.isStreaming && hasStarted {
+                    if !mjpegStream.isStreaming {
                         mjpegStream.startStreaming(url: "\(FileManagerClient.shared.baseURL)/api/camera-stream")
                     }
                 case .background, .inactive:
-                    mjpegStream.stopStreaming()
+                    // Keep stream running across navigation; do not stop here so the connection stays alive.
+                    break
                 @unknown default:
                     break
                 }
@@ -1112,6 +1333,9 @@ struct CameraFeedCard: View {
 @available(iOS 15.0, *)
 struct FileManagerView: View {
     @Binding var showDashboard: Bool
+    // Simple in-memory cache so we only fetch once per app session unless forced
+    private static var cachedFiles: [FileItem] = []
+    private static var didLoadFiles: Bool = false
     @State private var files: [FileItem] = []
     @State private var loading = false
     @State private var currentPath = ""
@@ -1239,7 +1463,7 @@ struct FileManagerView: View {
                     
                     Spacer()
                     
-                    Button(action: { loadFiles() }) {
+                    Button(action: { loadFiles(force: true) }) {
                         Label("Refresh", systemImage: "arrow.clockwise")
                             .foregroundColor(.white)
                             .font(.system(size: 16, weight: .semibold))
@@ -1274,9 +1498,9 @@ struct FileManagerView: View {
                                 DispatchQueue.main.async {
                                     isUploading = false
                                     switch result {
-                                    case .success():
-                                        print("uploaded \(url.lastPathComponent)")
-                                        loadFiles()
+                                                    case .success():
+                                                        print("uploaded \(url.lastPathComponent)")
+                                                        loadFiles(force: true)
                                     case .failure(let err):
                                         print("upload error: \(err)")
                                     }
@@ -1290,7 +1514,7 @@ struct FileManagerView: View {
             .fullScreenCover(isPresented: $showingImageViewer) {
                 if let item = selectedItem {
                     ImageViewer(item: item, isPresented: $showingImageViewer) {
-                        loadFiles()
+                        loadFiles(force: true)
                     }
                     .transition(.asymmetric(
                         insertion: .scale(scale: 0.1).combined(with: .opacity),
@@ -1299,18 +1523,33 @@ struct FileManagerView: View {
                 }
             }
             .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showingImageViewer)
-            .onAppear(perform: loadFiles)
+            .onAppear { loadFiles() }
         }
         
-        func loadFiles() {
+        func loadFiles(force: Bool = false) {
+            if FileManagerView.didLoadFiles && !force {
+                self.files = FileManagerView.cachedFiles
+                return
+            }
+
             loading = true
-        FileManagerClient.shared.listFiles(path: currentPath) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let items): self.files = items
-                case .failure(let err): print("list error: \(err)")
-                }
-                loading = false
+            FileManagerClient.shared.listFiles(path: currentPath) { result in
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success(let items):
+                            // Show all items returned by the server (including `whiteboards`).
+                            // Previously we excluded the `whiteboards` folder here; that prevented
+                            // whiteboard files from being visible in the generic Cloud Storage view.
+                            // If you want to hide whiteboards from this view, uncomment the filter below.
+                            self.files = items
+                            FileManagerView.cachedFiles = items
+                            FileManagerView.didLoadFiles = true
+                        case .failure(let err):
+                            print("list error: \(err)")
+                        }
+
+                        loading = false
+                    }
             }
         }
     }
@@ -1319,7 +1558,7 @@ struct FileManagerView: View {
         let imageExtensions = ["jpg", "jpeg", "png", "gif", "heic", "heif", "webp"]
         return imageExtensions.contains(name.components(separatedBy: ".").last?.lowercased() ?? "")
     }
-}
+
 
 // MARK: - Editable Widget Grid
 @available(iOS 15.0, *)
@@ -1936,6 +2175,8 @@ struct ImageViewer: View {
     // MARK: - MJPEG Stream Handler
     @available(iOS 15.0, *)
     class MJPEGStreamView: NSObject, ObservableObject, URLSessionDataDelegate {
+        // Shared singleton so the stream connection can be established once per app lifecycle
+        static let shared = MJPEGStreamView()
         @Published var currentFrame: UIImage?
         @Published var isLoading = true
         @Published var errorMessage = ""

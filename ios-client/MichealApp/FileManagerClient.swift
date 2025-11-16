@@ -27,35 +27,109 @@ final class FileManagerClient: NSObject {
     
     // List files in a directory
     func listFiles(path: String = "", completion: @escaping (Result<[FileItem], Error>) -> Void) {
-        guard var components = URLComponents(string: SERVER_BASE_URL + "/api/files") else { return }
-        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        // Fire a debug ping so server logs headers for this client — useful to correlate requests
+        pingDebug(test: "listFiles")
+
+        // Build URL explicitly (scheme/host/port/path) to mimic curl formatting
+        guard let baseURL = URL(string: SERVER_BASE_URL) else { return }
+        var components = URLComponents()
+        components.scheme = baseURL.scheme
+        components.host = baseURL.host
+        components.port = baseURL.port
+        // Ensure we don't accidentally include duplicate slashes
+        let basePath = baseURL.path.isEmpty ? "" : baseURL.path
+        // If requesting the whiteboards folder, use the focused endpoint which
+        // returns only whiteboard JSON files and skips transient zero-byte files.
+        if path == "whiteboards" {
+            components.path = (basePath as NSString).appendingPathComponent("api/whiteboards")
+        } else {
+            components.path = (basePath as NSString).appendingPathComponent("api/files")
+            components.queryItems = [URLQueryItem(name: "path", value: path)]
+        }
         guard let url = components.url else { return }
 
-        let task = session.dataTask(with: url) { data, resp, err in
+        var req = URLRequest(url: url)
+        // Make request headers similar to curl to avoid different routing by intermediaries
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        // Some intermediaries or proxies route differently based on User-Agent — mimic curl for testing
+        req.setValue("curl/8.7.1", forHTTPHeaderField: "User-Agent")
+        // Optionally set Host header to exactly match curl's Host (helps if a proxy cares)
+        if let host = baseURL.host, let port = baseURL.port {
+            req.setValue("\(host):\(port)", forHTTPHeaderField: "Host")
+        } else if let host = baseURL.host {
+            req.setValue(host, forHTTPHeaderField: "Host")
+        }
+
+        print("FileManagerClient.listFiles: sending request to URL=\(url.absoluteString) headers=\(req.allHTTPHeaderFields ?? [:])")
+
+        let task = session.dataTask(with: req) { data, resp, err in
             if let err = err { completion(.failure(err)); return }
             guard let data = data else { completion(.failure(NSError(domain: "no-data", code: -1))); return }
+
+            // Log HTTP status and headers for debugging network issues
+            if let httpResp = resp as? HTTPURLResponse {
+                print("FileManagerClient.listFiles: URL=\(url.absoluteString) returned status=\(httpResp.statusCode)")
+                print("FileManagerClient.listFiles: headers=\(httpResp.allHeaderFields)")
+            } else {
+                print("FileManagerClient.listFiles: no HTTPURLResponse for URL=\(url.absoluteString)")
+            }
+            if let bodyString = String(data: data, encoding: .utf8) {
+                print("FileManagerClient.listFiles: raw body=\n\(bodyString)")
+            } else {
+                print("FileManagerClient.listFiles: unable to convert response body to utf8 string")
+            }
+
+            // Define Codable response matching server
+            struct FilesResponse: Codable {
+                let files: [FileItem]
+                let currentPath: String?
+                let count: Int?
+            }
+
             do {
-                // Server returns { files: [...], currentPath: "string", count: number }
-                // We only care about the files array
-                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                if let filesArray = json?["files"] as? [[String: Any]] {
-                    // Manually decode FileItem array
-                    let items = filesArray.compactMap { dict -> FileItem? in
-                        guard let name = dict["name"] as? String,
-                              let isDirectory = dict["isDirectory"] as? Bool,
-                              let path = dict["path"] as? String else {
-                            return nil
-                        }
-                        let size = dict["size"] as? Int
-                        let modified = dict["modified"] as? String
-                        return FileItem(name: name, isDirectory: isDirectory, size: size, modified: modified, path: path)
-                    }
-                    completion(.success(items))
-                } else {
-                    completion(.failure(NSError(domain: "invalid-response", code: -1)))
-                }
+                let decoder = JSONDecoder()
+                // Server `modified` may be returned as a string; FileItem expects `modified` as String
+                let respObj = try decoder.decode(FilesResponse.self, from: data)
+                completion(.success(respObj.files))
             } catch {
-                completion(.failure(error))
+                // If decoding fails, log the raw response to help debugging
+                if let s = String(data: data, encoding: .utf8) {
+                    print("FileManagerClient.listFiles: failed to decode response from \(url). Raw response:\n\(s)")
+                } else {
+                    print("FileManagerClient.listFiles: failed to decode response and cannot convert data to string")
+                }
+                completion(.failure(NSError(domain: "invalid-response", code: -1)))
+            }
+        }
+        task.resume()
+    }
+
+    // Ping the server debug endpoint to get echo of headers/query for correlation
+    func pingDebug(test: String = "ios") {
+        guard let baseURL = URL(string: SERVER_BASE_URL) else { return }
+        var components = URLComponents()
+        components.scheme = baseURL.scheme
+        components.host = baseURL.host
+        components.port = baseURL.port
+        let basePath = baseURL.path.isEmpty ? "" : baseURL.path
+        components.path = (basePath as NSString).appendingPathComponent("api/debug")
+        components.queryItems = [URLQueryItem(name: "test", value: test)]
+        guard let url = components.url else { return }
+
+        var req = URLRequest(url: url)
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+
+        let task = session.dataTask(with: req) { data, resp, err in
+            if let err = err {
+                print("FileManagerClient.pingDebug: error=\(err)")
+                return
+            }
+            if let httpResp = resp as? HTTPURLResponse {
+                print("FileManagerClient.pingDebug: URL=\(url.absoluteString) returned status=\(httpResp.statusCode)")
+                print("FileManagerClient.pingDebug: headers=\(httpResp.allHeaderFields)")
+            }
+            if let data = data, let s = String(data: data, encoding: .utf8) {
+                print("FileManagerClient.pingDebug: body=\n\(s)")
             }
         }
         task.resume()
@@ -66,9 +140,27 @@ final class FileManagerClient: NSObject {
         guard var components = URLComponents(string: SERVER_BASE_URL + "/api/download") else { return }
         components.queryItems = [URLQueryItem(name: "path", value: serverPath)]
         guard let url = components.url else { return }
+
+        // Use downloadTask but validate HTTP status code before saving the file.
         let task = session.downloadTask(with: url) { tempURL, resp, err in
             if let err = err { completion(.failure(err)); return }
+
+            guard let httpResp = resp as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "invalid-response", code: -1))); return
+            }
+
+            // If server returned non-200, read error body (if any) and return an error.
+            guard httpResp.statusCode == 200 else {
+                if let tempURL = tempURL, let errData = try? Data(contentsOf: tempURL), let s = String(data: errData, encoding: .utf8) {
+                    completion(.failure(NSError(domain: "server-error", code: httpResp.statusCode, userInfo: ["body": s])))
+                } else {
+                    completion(.failure(NSError(domain: "server-error", code: httpResp.statusCode)))
+                }
+                return
+            }
+
             guard let tempURL = tempURL else { completion(.failure(NSError(domain: "no-temp", code: -1))); return }
+
             // Move to documents directory with the same filename
             do {
                 let fileName = serverPath.split(separator: "/").last.map(String.init) ?? "download"

@@ -3,7 +3,20 @@ import fs from 'fs';
 import path from 'path';
 import { shouldCompress, compressFile, compressFolder, getFolderSize, formatBytes } from '@/lib/compression';
 
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
+// Resolve the uploads directory by searching upward from the current working directory.
+function resolveUploadsDir(): string {
+  const attempts = [process.cwd(), path.join(process.cwd(), '..'), path.join(process.cwd(), '..', '..')];
+  for (const base of attempts) {
+    const candidate = path.join(base, 'uploads');
+    if (fs.existsSync(candidate)) return path.resolve(candidate);
+  }
+  // Fallback to a best-effort path relative to this file
+  const fallback = path.resolve(process.cwd(), 'uploads');
+  return fallback;
+}
+
+const UPLOAD_DIR = resolveUploadsDir();
+console.log(`[files] using uploads dir: ${UPLOAD_DIR}`);
 const COMPRESSION_THRESHOLD = 100 * 1024 * 1024; // 100 MB
 
 // Ensure uploads directory exists
@@ -17,14 +30,38 @@ export async function GET(request: NextRequest) {
     const dirPath = searchParams.get('path') || '';
     
     const fullPath = path.join(UPLOAD_DIR, dirPath);
+
+    // Debugging: log incoming request info to help diagnose client issues
+    const headersObj: Record<string, string> = {};
+    request.headers.forEach((value, key) => { headersObj[key] = value });
+    const forwardedFor = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    console.log(`[files.GET] requested path='${dirPath}' | UPLOAD_DIR='${UPLOAD_DIR}' | fullPath='${fullPath}' | forwardedFor='${forwardedFor}' | user-agent='${request.headers.get('user-agent')}'`);
+    console.log('[files.GET] request headers:', headersObj);
+    try {
+      const exists = fs.existsSync(fullPath);
+      console.log(`[files.GET] fullPath exists: ${exists}`);
+      if (exists) {
+        const st = fs.statSync(fullPath);
+        console.log(`[files.GET] fullPath isFile:${st.isFile()} isDirectory:${st.isDirectory()} size:${st.size} mtime:${st.mtime}`);
+      }
+    } catch (e) {
+      console.warn('[files.GET] error while checking fullPath:', e);
+    }
     
-    // Security check: ensure path is within UPLOAD_DIR
-    if (!fullPath.startsWith(UPLOAD_DIR)) {
+    // Security check: ensure path is within UPLOAD_DIR (use path.relative to avoid edge cases)
+    const resolvedUploadDir = path.resolve(UPLOAD_DIR);
+    const resolvedFullPath = path.resolve(fullPath);
+    const relative = path.relative(resolvedUploadDir, resolvedFullPath);
+    console.log(`[files.GET] resolvedUploadDir='${resolvedUploadDir}' resolvedFullPath='${resolvedFullPath}' relative='${relative}'`);
+    if (relative.startsWith('..') || path.isAbsolute(relative) && !resolvedFullPath.startsWith(resolvedUploadDir)) {
       return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
     }
 
     if (!fs.existsSync(fullPath)) {
-      return NextResponse.json({ error: 'Path not found' }, { status: 404 });
+      // Path doesn't exist — return an empty listing instead of 404 so clients can treat
+      // a missing folder as "no files". Also log for debugging.
+      console.log(`[files.GET] path not found: '${fullPath}' — returning empty files list`);
+      return NextResponse.json({ files: [], currentPath: dirPath, count: 0 });
     }
 
     // Check if it's a file or directory
@@ -76,7 +113,12 @@ export async function GET(request: NextRequest) {
     }
 
     // If it's a directory, list contents
-    const items = await fs.promises.readdir(fullPath);
+    // Read directory entries and include Dirent info to diagnose missing files
+    const dirents = await fs.promises.readdir(fullPath, { withFileTypes: true });
+    const items = dirents.map(d => d.name);
+    // Debug: log raw dir entries and type info when debugging whiteboards
+    console.log(`[files.GET] raw dir entries for '${fullPath}':`);
+    dirents.forEach(d => console.log(`  - ${d.name} (isDirectory=${d.isDirectory()} isFile=${d.isFile()})`));
     
     // Process files in parallel batches for speed
     const BATCH_SIZE = 50;
@@ -88,8 +130,21 @@ export async function GET(request: NextRequest) {
         batch.map(async (item) => {
           try {
             const itemPath = path.join(fullPath, item);
-            const stats = await fs.promises.stat(itemPath);
-            
+            let stats;
+            try {
+              stats = await fs.promises.stat(itemPath);
+            } catch (statErr) {
+              console.warn(`[files.GET] stat failed for '${itemPath}':`, statErr && statErr.message ? statErr.message : statErr);
+              throw statErr;
+            }
+
+            // Skip zero-byte files which may be transient or invalid; log for
+            // diagnostics so operators can repair or retry uploads if needed.
+            if (stats.size === 0) {
+              console.warn(`[files.GET] skipping zero-size file '${itemPath}'`);
+              return null;
+            }
+
             return {
               name: item,
               isDirectory: stats.isDirectory(),
@@ -99,7 +154,7 @@ export async function GET(request: NextRequest) {
             };
           } catch (err) {
             // Skip files that can't be accessed
-            console.warn(`Cannot access ${item}:`, err);
+            console.warn(`Cannot access ${item}:`, err && err.message ? err.message : err);
             return null;
           }
         })
@@ -125,6 +180,7 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const dirPath = (formData.get('path') as string) || '';
     const uploadPath = path.join(UPLOAD_DIR, dirPath);
+    console.log(`[files.POST] upload requested path='${dirPath}' -> uploadPath='${uploadPath}'`);
     
     // Security check
     if (!uploadPath.startsWith(UPLOAD_DIR)) {
@@ -162,11 +218,16 @@ export async function POST(request: NextRequest) {
       }
 
       const finalPath = path.join(uploadPath, relativePath);
-      
-      // Stream file to disk to avoid loading entire file in memory
+
+      // Stream file to disk to avoid loading entire file in memory.
+      // Write to a temporary file first and then rename to finalPath to
+      // ensure the file appears atomically and to avoid exposing
+      // partially-written or empty files to readers.
+      const tmpPath = `${finalPath}.tmp`;
       const bytes = await file.arrayBuffer();
       const buffer = Buffer.from(bytes);
-      await fs.promises.writeFile(finalPath, buffer);
+      await fs.promises.writeFile(tmpPath, buffer);
+      await fs.promises.rename(tmpPath, finalPath);
       
       const fileSize = buffer.length;
       totalSize += fileSize;
@@ -175,6 +236,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (uploadedFiles.length === 0) {
+      console.log('[files.POST] no files provided in upload');
       return NextResponse.json({ error: 'No files provided' }, { status: 400 });
     }
 
@@ -212,6 +274,7 @@ export async function POST(request: NextRequest) {
         ? 'File uploaded successfully'
         : `${uploadedFiles.length} files uploaded successfully`;
 
+    console.log(`[files.POST] uploadedFiles=${JSON.stringify(uploadedFiles)} totalSize=${totalSize} compressed=${JSON.stringify(compressedFiles)}`);
     return NextResponse.json({ 
       success: true, 
       message,
@@ -229,6 +292,7 @@ export async function DELETE(request: NextRequest) {
   try {
     const { filePath } = await request.json();
     
+    console.log(`[files.DELETE] requested filePath='${filePath}'`);
     const fullPath = path.join(UPLOAD_DIR, filePath);
     
     // Security check
