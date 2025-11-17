@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import QuickLook
 import CoreGraphics
 
 extension Color {
@@ -19,6 +20,34 @@ extension Color {
             (a, r, g, b) = (255, 0, 0, 0)
         }
         self.init(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255, opacity: Double(a) / 255)
+    }
+}
+
+// QuickLook wrapper to preview many file types (PDF, audio, video, images, etc.)
+struct QuickLookPreview: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let controller = QLPreviewController()
+        controller.dataSource = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {
+        // nothing to update
+    }
+
+    class Coordinator: NSObject, QLPreviewControllerDataSource {
+        var parent: QuickLookPreview
+        init(_ parent: QuickLookPreview) { self.parent = parent }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+            return parent.url as NSURL
+        }
     }
 }
 
@@ -1372,6 +1401,8 @@ struct FileManagerView: View {
     @State private var uploadingFileName = ""
     @State private var selectedItem: FileItem? = nil
     @State private var showingImageViewer = false
+    @State private var previewURL: URL? = nil
+    @State private var showingPreview = false
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -1464,16 +1495,22 @@ struct FileManagerView: View {
                 
                 ScrollView {
                     LazyVGrid(columns: fileGridColumns, spacing: 10) {
-                        ForEach(files) { item in
-                            FileGridItem(item: item) {
-                                if item.isDirectory {
-                                    // Navigate to folder
-                                } else if isImageFile(item.name) {
-                                    selectedItem = item
-                                    showingImageViewer = true
+                                ForEach(files) { item in
+                                    FileGridItem(item: item) {
+                                        if item.isDirectory {
+                                            // Navigate into folder
+                                            if currentPath.isEmpty {
+                                                currentPath = item.name
+                                            } else {
+                                                currentPath = "\(currentPath)/\(item.name)"
+                                            }
+                                            loadFiles(force: true)
+                                        } else {
+                                            // Open any file type using QuickLook after downloading
+                                            openFile(item: item)
+                                        }
+                                    }
                                 }
-                            }
-                        }
                     }
                     .padding()
                 }
@@ -1504,14 +1541,48 @@ struct FileManagerView: View {
                                     .stroke(Color.white.opacity(0.2), lineWidth: 1)
                             )
                     )
+                    if !currentPath.isEmpty {
+                        Button(action: {
+                            // Go up one directory
+                            if let idx = currentPath.lastIndex(of: "/") {
+                                currentPath = String(currentPath[..<idx])
+                            } else {
+                                currentPath = ""
+                            }
+                            loadFiles(force: true)
+                        }) {
+                            Label("Up", systemImage: "arrow.up")
+                                .foregroundColor(.white)
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                    }
                 }
                 .padding()
             }
             .sheet(isPresented: $showPicker) {
                 DocumentPicker { urls in
                     for url in urls {
+                        // Optimistically insert the file into the UI immediately
+                        let filename = url.lastPathComponent
+                        var fileSize: Int? = nil
+                        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path), let size = attrs[.size] as? NSNumber {
+                            fileSize = size.intValue
+                        }
+                        let serverPath = currentPath.isEmpty ? filename : "\(currentPath)/\(filename)"
+                        let optimistic = FileItem(name: filename, isDirectory: false, size: fileSize, modified: nil, path: serverPath)
+                        // Insert at top of lists so users see it immediately
+                        DispatchQueue.main.async {
+                            self.files.insert(optimistic, at: 0)
+                            FileManagerView.cachedFiles = self.files
+                        }
+
                         isUploading = true
-                        uploadingFileName = url.lastPathComponent
+                        uploadingFileName = filename
                         uploadProgress = 0.0
                         
                         FileManagerClient.shared.upload(
@@ -1527,9 +1598,15 @@ struct FileManagerView: View {
                                     switch result {
                                                     case .success():
                                                         print("uploaded \(url.lastPathComponent)")
+                                                        // Refresh listing to replace optimistic entry with canonical server data
                                                         loadFiles(force: true)
                                     case .failure(let err):
                                         print("upload error: \(err)")
+                                        // Remove optimistic placeholder on failure
+                                        DispatchQueue.main.async {
+                                            self.files.removeAll { $0.path == serverPath }
+                                            FileManagerView.cachedFiles = self.files
+                                        }
                                     }
                                 }
                             }
@@ -1549,42 +1626,68 @@ struct FileManagerView: View {
                     ))
                 }
             }
+            .sheet(isPresented: $showingPreview, onDismiss: { previewURL = nil }) {
+                if let url = previewURL {
+                    QuickLookPreview(url: url)
+                } else {
+                    Text("No preview available")
+                }
+            }
             .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showingImageViewer)
             .onAppear { loadFiles() }
         }
         
-        func loadFiles(force: Bool = false) {
-            if FileManagerView.didLoadFiles && !force {
-                self.files = FileManagerView.cachedFiles
-                return
-            }
+        // end of FileManagerView
+    }
 
-            loading = true
-            FileManagerClient.shared.listFiles(path: currentPath) { result in
-                    DispatchQueue.main.async {
-                        switch result {
-                        case .success(let items):
-                            // Show all items returned by the server (including `whiteboards`).
-                            // Previously we excluded the `whiteboards` folder here; that prevented
-                            // whiteboard files from being visible in the generic Cloud Storage view.
-                            // If you want to hide whiteboards from this view, uncomment the filter below.
-                            self.files = items
-                            FileManagerView.cachedFiles = items
-                            FileManagerView.didLoadFiles = true
-                        case .failure(let err):
-                            print("list error: \(err)")
-                        }
+// Move helper methods into an extension so they exist in the type context
+// and can freely reference `self`/`@State` properties when used from
+// nested closures.
+@available(iOS 15.0, *)
+extension FileManagerView {
+    func loadFiles(force: Bool = false) {
+        if FileManagerView.didLoadFiles && !force {
+            files = FileManagerView.cachedFiles
+            return
+        }
 
-                        loading = false
-                    }
+        loading = true
+        FileManagerClient.shared.listFiles(path: currentPath) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let items):
+                    self.files = items
+                    FileManagerView.cachedFiles = items
+                    FileManagerView.didLoadFiles = true
+                case .failure(let err):
+                    print("list error: \(err)")
+                }
+
+                loading = false
             }
         }
     }
-    
+
     func isImageFile(_ name: String) -> Bool {
         let imageExtensions = ["jpg", "jpeg", "png", "gif", "heic", "heif", "webp"]
         return imageExtensions.contains(name.components(separatedBy: ".").last?.lowercased() ?? "")
     }
+
+    // Download the file and present it using QuickLook (supports PDFs, audio, video, images, etc.)
+    func openFile(item: FileItem) {
+        FileManagerClient.shared.downloadFile(at: item.path) { result in
+            switch result {
+            case .success(let localURL):
+                DispatchQueue.main.async {
+                    self.previewURL = localURL
+                    self.showingPreview = true
+                }
+            case .failure(let err):
+                print("Failed to download file for preview: \(err)")
+            }
+        }
+    }
+}
 
 
 // MARK: - Editable Widget Grid
@@ -1868,9 +1971,8 @@ struct FileGridItem: View {
                     } else if let thumb = thumbnail {
                         Image(uiImage: thumb)
                             .resizable()
-                            .scaledToFill()
+                            .scaledToFit()
                             .frame(width: 100, height: 100)
-                            .clipped()
                             .cornerRadius(8)
                     } else {
                         ZStack {
@@ -1909,37 +2011,27 @@ struct FileGridItem: View {
                 }
             }
             .onTapGesture {
-                // Regular tap also works
-                if !item.isDirectory && isImageFile(item.name) {
-                    onTap()
-                }
+                // Regular tap — call the tap handler for both images and other files.
+                onTap()
             }
             .onAppear {
+                // Start thumbnail prefetch for image files only, using a shared
+                // prefetcher with limited concurrency and an in-memory cache.
                 if !item.isDirectory && isImageFile(item.name) {
-                    loadThumbnail()
-                }
-            }
-        }
-        
-        func loadThumbnail() {
-            FileManagerClient.shared.downloadFile(at: item.path) { result in
-                if case .success(let url) = result {
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        if let image = UIImage(contentsOfFile: url.path) {
-                            let size = CGSize(width: 300, height: 300)
-                            let renderer = UIGraphicsImageRenderer(size: size)
-                            let thumb = renderer.image { _ in
-                                image.draw(in: CGRect(origin: .zero, size: size))
-                            }
-                            
-                            DispatchQueue.main.async {
-                                self.thumbnail = thumb
+                    if let img = ThumbnailPrefetcher.shared.image(forPath: item.path) {
+                        thumbnail = img
+                    } else {
+                        ThumbnailPrefetcher.shared.prefetch(path: item.path) { img in
+                            if let img = img {
+                                self.thumbnail = img
                             }
                         }
                     }
                 }
             }
         }
+        
+        // loadThumbnail removed — using ThumbnailPrefetcher instead
         
         func isImageFile(_ name: String) -> Bool {
             let imageExtensions = ["jpg", "jpeg", "png", "gif", "heic", "heif", "webp"]

@@ -45,12 +45,31 @@ export async function GET(request: NextRequest) {
     
     // Encode filename to handle special characters (RFC 5987)
     const encodedFileName = encodeURIComponent(fileName);
-    
+
+    // Map common extensions to content-types so clients (QuickLook) can open them inline.
+    const ext = path.extname(fileName).toLowerCase();
+    const contentTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.pdf': 'application/pdf',
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.m4a': 'audio/mp4',
+      '.json': 'application/json',
+      '.txt': 'text/plain'
+    };
+
+    const contentType = contentTypes[ext] || 'application/octet-stream';
+
     return new NextResponse(file, {
       headers: {
         'Content-Disposition': `attachment; filename*=UTF-8''${encodedFileName}`,
-        // If it's a JSON file, use application/json so clients decode easily.
-        'Content-Type': fileName.toLowerCase().endsWith('.json') ? 'application/json' : 'application/octet-stream',
+        'Content-Type': contentType,
       },
     });
   } catch (error) {

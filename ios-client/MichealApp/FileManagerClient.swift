@@ -22,6 +22,8 @@ final class FileManagerClient: NSObject {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 300
+        // Allow more concurrent connections to the server for faster parallel downloads (thumbnails/files)
+        config.httpMaximumConnectionsPerHost = 8
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
     
@@ -44,11 +46,24 @@ final class FileManagerClient: NSObject {
             components.path = (basePath as NSString).appendingPathComponent("api/whiteboards")
         } else {
             components.path = (basePath as NSString).appendingPathComponent("api/files")
-            components.queryItems = [URLQueryItem(name: "path", value: path)]
+            // Only include the `path` query parameter when a non-empty path
+            // is requested. Some server implementations treat an empty
+            // `path=` differently than omitting the parameter — omitting
+            // it yields the expected root/cloud listing.
+            if !path.isEmpty {
+                components.queryItems = [URLQueryItem(name: "path", value: path)]
+            }
         }
         guard let url = components.url else { return }
 
         var req = URLRequest(url: url)
+        // Always request a fresh listing from the server — the server
+        // currently sets very long cache lifetimes which can cause the
+        // app to show stale results after an upload. Force reload and
+        // add no-cache headers to bypass URLSession/local caches.
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        req.setValue("no-cache", forHTTPHeaderField: "Pragma")
         // Make request headers similar to curl to avoid different routing by intermediaries
         req.setValue("*/*", forHTTPHeaderField: "Accept")
         // Some intermediaries or proxies route differently based on User-Agent — mimic curl for testing
@@ -90,7 +105,18 @@ final class FileManagerClient: NSObject {
                 let decoder = JSONDecoder()
                 // Server `modified` may be returned as a string; FileItem expects `modified` as String
                 let respObj = try decoder.decode(FilesResponse.self, from: data)
-                completion(.success(respObj.files))
+
+                // Exclude the whiteboards folder from the cloud storage
+                // listing so the app's Cloud Storage view doesn't surface
+                // that special-purpose directory. Keep directories and
+                // files otherwise intact so the UI can navigate into folders.
+                let filtered = respObj.files.filter { file in
+                    return file.name.lowercased() != "whiteboards"
+                }
+
+                print("FileManagerClient.listFiles: filtered out whiteboards. before=\(respObj.files.count) after=\(filtered.count)")
+
+                completion(.success(filtered))
             } catch {
                 // If decoding fails, log the raw response to help debugging
                 if let s = String(data: data, encoding: .utf8) {
@@ -141,8 +167,16 @@ final class FileManagerClient: NSObject {
         components.queryItems = [URLQueryItem(name: "path", value: serverPath)]
         guard let url = components.url else { return }
 
+        // Build a URLRequest so we can control cache policy and headers.
+        var req = URLRequest(url: url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        req.setValue("no-cache", forHTTPHeaderField: "Pragma")
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        req.setValue("curl/8.7.1", forHTTPHeaderField: "User-Agent")
+
         // Use downloadTask but validate HTTP status code before saving the file.
-        let task = session.downloadTask(with: url) { tempURL, resp, err in
+        let task = session.downloadTask(with: req) { tempURL, resp, err in
             if let err = err { completion(.failure(err)); return }
 
             guard let httpResp = resp as? HTTPURLResponse else {
@@ -172,6 +206,8 @@ final class FileManagerClient: NSObject {
                 completion(.failure(error))
             }
         }
+        // Prioritize file downloads triggered by user actions
+        task.priority = 1.0
         task.resume()
     }
 
