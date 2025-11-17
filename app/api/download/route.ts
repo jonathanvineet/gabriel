@@ -61,18 +61,43 @@ export async function GET(request: NextRequest) {
 
     const contentType = contentTypes[ext] || 'application/octet-stream';
 
-    // Stream file to client to avoid loading whole file into memory and to
-    // enable faster initial response streaming for large files.
-    const stream = fs.createReadStream(fullPath);
-    return new NextResponse(stream as any, {
-      headers: {
-        'Content-Disposition': `inline; filename*=UTF-8''${encodedFileName}`,
-        'Content-Type': contentType,
-        'Content-Length': stats.size.toString(),
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'public, max-age=3600'
+    // Support HTTP Range requests so clients (AVPlayer) can stream and seek
+    // without downloading the entire file. If a Range header is provided,
+    // respond with 206 Partial Content and the requested byte range.
+    const rangeHeader = request.headers.get('range');
+    console.log('[download.GET] rangeHeader=', rangeHeader);
+    const total = stats.size;
+    const headers: Record<string, string> = {
+      'Content-Disposition': `inline; filename*=UTF-8''${encodedFileName}`,
+      'Content-Type': contentType,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=3600'
+    };
+
+    if (rangeHeader) {
+      // Example Range: "bytes=0-"
+      const match = rangeHeader.match(/bytes=(\d+)-(\d+)?/);
+      if (!match) {
+        return NextResponse.json({ error: 'Invalid Range' }, { status: 416 });
       }
-    });
+      const start = parseInt(match[1], 10);
+      const end = match[2] ? parseInt(match[2], 10) : total - 1;
+      if (start >= total || end >= total || start > end) {
+        return NextResponse.json({ error: 'Requested Range Not Satisfiable' }, { status: 416 });
+      }
+
+      const chunkSize = (end - start) + 1;
+      headers['Content-Range'] = `bytes ${start}-${end}/${total}`;
+      headers['Content-Length'] = String(chunkSize);
+
+      const stream = fs.createReadStream(fullPath, { start, end });
+      return new NextResponse(stream as any, { status: 206, headers });
+    }
+
+    // No Range header; serve the full file
+    headers['Content-Length'] = String(total);
+    const stream = fs.createReadStream(fullPath);
+    return new NextResponse(stream as any, { headers });
   } catch (error) {
     console.error('Error downloading file:', error);
     return NextResponse.json({ error: 'Failed to download file' }, { status: 500 });

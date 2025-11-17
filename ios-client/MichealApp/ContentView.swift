@@ -1452,6 +1452,7 @@ struct FileManagerView: View {
     @State private var showingRemoteImage = false
     @State private var showingRemoteVideo = false
     @State private var showingRemoteWeb = false
+    @State private var activePlayer: AVPlayer? = nil
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -1709,10 +1710,23 @@ struct FileManagerView: View {
                     Text("No image")
                 }
             }
-            .sheet(isPresented: $showingRemoteVideo, onDismiss: { remoteURL = nil }) {
+            .sheet(isPresented: $showingRemoteVideo, onDismiss: {
+                if let p = activePlayer { p.pause() }
+                activePlayer = nil
+                remoteURL = nil
+            }) {
                 if let url = remoteURL {
-                    VideoPlayer(player: AVPlayer(url: url))
+                    VideoPlayer(player: activePlayer)
                         .edgesIgnoringSafeArea(.all)
+                        .onAppear {
+                            if activePlayer == nil {
+                                activePlayer = AVPlayer(url: url)
+                            }
+                            activePlayer?.play()
+                        }
+                        .onDisappear {
+                            activePlayer?.pause()
+                        }
                 } else {
                     Text("No media")
                 }
@@ -1783,32 +1797,14 @@ extension FileManagerView {
     // need to fully download the file first. For unknown types we
     // fall back to download+QuickLook.
     func openFile(item: FileItem) {
-        let name = item.name
-        // Try to get a direct server URL
-        if let remote = FileManagerClient.shared.urlForFile(path: item.path) {
-            if isImageFile(name) {
-                // Show remote image directly
-                self.remoteURL = remote
-                self.showingRemoteImage = true
-                return
-            }
+        // Always present files from a local cached copy inside the app so
+        // QuickLook / AVPlayer can access them reliably. Show a small
+        // thumbnail placeholder immediately while the file downloads.
+        let filename = item.name
+        let localDocs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let localURL = localDocs.appendingPathComponent(filename)
 
-            if isVideoFile(name) || isAudioFile(name) {
-                // Stream media via AVPlayer
-                self.remoteURL = remote
-                self.showingRemoteVideo = true
-                return
-            }
-
-            if isPdfFile(name) {
-                // Display PDFs in a lightweight web view
-                self.remoteURL = remote
-                self.showingRemoteWeb = true
-                return
-            }
-        }
-
-        // Fallback: prefetch a small thumbnail then download the full file
+        // Show thumbnail placeholder immediately (if available)
         FileManagerClient.shared.prefetchThumbnail(path: item.path) { img in
             DispatchQueue.main.async {
                 self.previewPlaceholderImage = img
@@ -1816,12 +1812,38 @@ extension FileManagerView {
             }
         }
 
-        FileManagerClient.shared.downloadFile(at: item.path) { result in
-            switch result {
-            case .success(let localURL):
+        // If the item is a video or audio file, stream it directly from the
+        // server using AVPlayer (this requires the server to support Range
+        // requests — implemented in the download route). This avoids full
+        // download and enables immediate playback and seeking.
+        if isVideoFile(filename) || isAudioFile(filename) {
+            if let remote = FileManagerClient.shared.urlForFile(path: item.path) {
                 DispatchQueue.main.async {
                     self.showingPlaceholderPreview = false
-                    self.previewURL = localURL
+                    self.remoteURL = remote
+                    self.showingRemoteVideo = true
+                }
+                return
+            }
+        }
+
+        // If file already cached locally, present it immediately
+        if FileManager.default.fileExists(atPath: localURL.path) {
+            DispatchQueue.main.async {
+                self.showingPlaceholderPreview = false
+                self.previewURL = localURL
+                self.showingPreview = true
+            }
+            return
+        }
+
+        // Otherwise download into local documents (downloadFile moves temp->Documents)
+        FileManagerClient.shared.downloadFile(at: item.path) { result in
+            switch result {
+            case .success(let downloadedURL):
+                DispatchQueue.main.async {
+                    self.showingPlaceholderPreview = false
+                    self.previewURL = downloadedURL
                     self.showingPreview = true
                 }
             case .failure(let err):
