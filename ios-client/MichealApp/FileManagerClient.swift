@@ -16,6 +16,10 @@ final class FileManagerClient: NSObject {
     
     private var session: URLSession!
     private var uploadProgressHandlers: [Int: (Double) -> Void] = [:]
+    // Thumbnail cache and prefetch controls
+    private let thumbnailCache = NSCache<NSString, UIImage>()
+    private let thumbnailSemaphore = DispatchSemaphore(value: 4)
+    private let thumbnailQueue = DispatchQueue(label: "thumbnail.queue", attributes: .concurrent)
     
     private override init() {
         super.init()
@@ -128,6 +132,51 @@ final class FileManagerClient: NSObject {
             }
         }
         task.resume()
+    }
+
+    // MARK: - Thumbnail helpers
+    func thumbnailImage(forPath path: String) -> UIImage? {
+        return thumbnailCache.object(forKey: path as NSString)
+    }
+
+    func prefetchThumbnail(path: String, completion: @escaping (UIImage?) -> Void) {
+        if let img = thumbnailImage(forPath: path) { completion(img); return }
+
+        thumbnailQueue.async {
+            self.thumbnailSemaphore.wait()
+            defer { self.thumbnailSemaphore.signal() }
+
+            guard let base = URL(string: self.SERVER_BASE_URL) else { DispatchQueue.main.async { completion(nil) }; return }
+            var components = URLComponents()
+            components.scheme = base.scheme
+            components.host = base.host
+            components.port = base.port
+            components.path = (base.path as NSString).appendingPathComponent("api/thumbnail")
+            // Request a small server-resized thumbnail for faster responses
+            components.queryItems = [
+                URLQueryItem(name: "path", value: path),
+                URLQueryItem(name: "w", value: "128"),
+                URLQueryItem(name: "h", value: "128")
+            ]
+            guard let url = components.url else { DispatchQueue.main.async { completion(nil) }; return }
+
+            var req = URLRequest(url: url)
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+
+            let sem = DispatchSemaphore(value: 0)
+            var resultImage: UIImage? = nil
+            let task = self.session.dataTask(with: req) { data, resp, err in
+                defer { sem.signal() }
+                if let data = data, let img = UIImage(data: data) {
+                    resultImage = img
+                    self.thumbnailCache.setObject(img, forKey: path as NSString)
+                }
+            }
+            task.resume()
+            // Wait a little longer for thumbnail generation on slower servers
+            _ = sem.wait(timeout: .now() + 8)
+            DispatchQueue.main.async { completion(resultImage) }
+        }
     }
 
     // Ping the server debug endpoint to get echo of headers/query for correlation

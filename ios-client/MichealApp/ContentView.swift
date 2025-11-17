@@ -1403,6 +1403,11 @@ struct FileManagerView: View {
     @State private var showingImageViewer = false
     @State private var previewURL: URL? = nil
     @State private var showingPreview = false
+    // Quick lightweight placeholder shown immediately while the full
+    // file downloads. We prefetch a small thumbnail and present it
+    // quickly to avoid QuickLook showing "No preview available".
+    @State private var previewPlaceholderImage: UIImage? = nil
+    @State private var showingPlaceholderPreview = false
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -1626,6 +1631,26 @@ struct FileManagerView: View {
                     ))
                 }
             }
+            .sheet(isPresented: $showingPlaceholderPreview, onDismiss: { previewPlaceholderImage = nil }) {
+                VStack {
+                    if let img = previewPlaceholderImage {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFit()
+                            .padding()
+                    } else {
+                        VStack(spacing: 12) {
+                            ProgressView("Preparing preview…")
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(1.2)
+                            Text("Loading preview…")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                    }
+                }
+            }
             .sheet(isPresented: $showingPreview, onDismiss: { previewURL = nil }) {
                 if let url = previewURL {
                     QuickLookPreview(url: url)
@@ -1675,14 +1700,39 @@ extension FileManagerView {
 
     // Download the file and present it using QuickLook (supports PDFs, audio, video, images, etc.)
     func openFile(item: FileItem) {
+        // 1) Prefetch a small thumbnail quickly and show a lightweight
+        // placeholder (image or spinner) so the user sees immediate
+        // feedback while the full file downloads.
+        FileManagerClient.shared.prefetchThumbnail(path: item.path) { img in
+            DispatchQueue.main.async {
+                if let img = img {
+                    self.previewPlaceholderImage = img
+                } else {
+                    self.previewPlaceholderImage = nil
+                }
+                // Present the lightweight placeholder sheet immediately
+                // (it will be dismissed when the full QuickLook preview is ready).
+                self.showingPlaceholderPreview = true
+            }
+        }
+
+        // 2) Start the full download with high priority. When it
+        // completes present QuickLook and dismiss the placeholder.
         FileManagerClient.shared.downloadFile(at: item.path) { result in
             switch result {
             case .success(let localURL):
                 DispatchQueue.main.async {
+                    // Dismiss the placeholder and show QuickLook for the
+                    // fully downloaded file.
+                    self.showingPlaceholderPreview = false
                     self.previewURL = localURL
                     self.showingPreview = true
                 }
             case .failure(let err):
+                DispatchQueue.main.async {
+                    // Hide placeholder and optionally show an error toast later
+                    self.showingPlaceholderPreview = false
+                }
                 print("Failed to download file for preview: \(err)")
             }
         }
@@ -2018,10 +2068,10 @@ struct FileGridItem: View {
                 // Start thumbnail prefetch for image files only, using a shared
                 // prefetcher with limited concurrency and an in-memory cache.
                 if !item.isDirectory && isImageFile(item.name) {
-                    if let img = ThumbnailPrefetcher.shared.image(forPath: item.path) {
+                    if let img = FileManagerClient.shared.thumbnailImage(forPath: item.path) {
                         thumbnail = img
                     } else {
-                        ThumbnailPrefetcher.shared.prefetch(path: item.path) { img in
+                        FileManagerClient.shared.prefetchThumbnail(path: item.path) { img in
                             if let img = img {
                                 self.thumbnail = img
                             }

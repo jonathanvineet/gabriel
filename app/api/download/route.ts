@@ -40,13 +40,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Cannot download a directory' }, { status: 400 });
     }
 
-    const file = fs.readFileSync(fullPath);
     const fileName = path.basename(fullPath);
-    
-    // Encode filename to handle special characters (RFC 5987)
     const encodedFileName = encodeURIComponent(fileName);
-
-    // Map common extensions to content-types so clients (QuickLook) can open them inline.
     const ext = path.extname(fileName).toLowerCase();
     const contentTypes: Record<string, string> = {
       '.jpg': 'image/jpeg',
@@ -66,11 +61,18 @@ export async function GET(request: NextRequest) {
 
     const contentType = contentTypes[ext] || 'application/octet-stream';
 
-    return new NextResponse(file, {
+    // Stream file to client to avoid loading whole file into memory and to
+    // enable faster initial response streaming for large files.
+    const stats = fs.statSync(fullPath);
+    const stream = fs.createReadStream(fullPath);
+    return new NextResponse(stream as any, {
       headers: {
-        'Content-Disposition': `attachment; filename*=UTF-8''${encodedFileName}`,
+        'Content-Disposition': `inline; filename*=UTF-8''${encodedFileName}`,
         'Content-Type': contentType,
-      },
+        'Content-Length': stats.size.toString(),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'public, max-age=3600'
+      }
     });
   } catch (error) {
     console.error('Error downloading file:', error);

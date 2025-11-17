@@ -1,8 +1,8 @@
 import Foundation
 import UIKit
 
-final class ThumbnailPrefetcher {
-    static let shared = ThumbnailPrefetcher()
+public final class ThumbnailPrefetcher {
+    public static let shared = ThumbnailPrefetcher()
 
     private let cache = NSCache<NSString, UIImage>()
     private let semaphore = DispatchSemaphore(value: 4) // limit concurrent fetches
@@ -10,11 +10,11 @@ final class ThumbnailPrefetcher {
 
     private init() {}
 
-    func image(forPath path: String) -> UIImage? {
+    public func image(forPath path: String) -> UIImage? {
         return cache.object(forKey: path as NSString)
     }
 
-    func prefetch(path: String, completion: @escaping (UIImage?) -> Void) {
+    public func prefetch(path: String, completion: @escaping (UIImage?) -> Void) {
         if let img = image(forPath: path) {
             completion(img); return
         }

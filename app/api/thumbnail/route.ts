@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+// Dynamically import sharp if available; fall back to serving original image
+let sharp: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  sharp = require('sharp');
+} catch (e) {
+  console.warn('sharp not available; thumbnails will be served without resizing');
+}
 
 function resolveUploadsDir(): string {
   const attempts = [process.cwd(), path.join(process.cwd(), '..'), path.join(process.cwd(), '..', '..')];
@@ -40,7 +48,52 @@ export async function GET(request: NextRequest) {
     const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'];
 
     if (imageExts.includes(ext)) {
-      // Serve image directly; clients will resize locally for thumbnails.
+      // Support width/height query parameters for server-side resized thumbnails.
+      const w = parseInt(searchParams.get('w') || '', 10) || 0;
+      const h = parseInt(searchParams.get('h') || '', 10) || 0;
+
+      // Thumbnail cache directory under uploads/.thumbs
+      const thumbDir = path.join(UPLOAD_DIR, '.thumbs');
+      if (!fs.existsSync(thumbDir)) fs.mkdirSync(thumbDir, { recursive: true });
+
+      // Use encoded file path as a safe filename
+      const safeName = encodeURIComponent(filePath).replace(/%2F/g, '__');
+      const thumbName = w || h ? `${safeName}-${w}x${h}.jpg` : `${safeName}-orig${ext}`;
+      const thumbPath = path.join(thumbDir, thumbName);
+
+      // If thumbnail already exists, serve it
+      if (fs.existsSync(thumbPath)) {
+        const stream = fs.createReadStream(thumbPath);
+        return new NextResponse(stream as any, {
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'Cache-Control': 'public, max-age=86400'
+          }
+        });
+      }
+
+      // If sharp is available and a resize is requested, generate thumbnail
+      if (sharp && (w > 0 || h > 0)) {
+        try {
+          const data = await sharp(fullPath).resize(w > 0 ? w : null, h > 0 ? h : null, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
+          // Atomically write thumbnail
+          const tmp = thumbPath + '.tmp';
+          fs.writeFileSync(tmp, data);
+          fs.renameSync(tmp, thumbPath);
+          return new NextResponse(data, {
+            headers: {
+              'Content-Type': 'image/jpeg',
+              'Content-Length': String(data.length),
+              'Cache-Control': 'public, max-age=86400'
+            }
+          });
+        } catch (err) {
+          console.error('sharp thumbnail generation failed', err);
+          // Fall back to serving original file below
+        }
+      }
+
+      // Serve original image if no thumbnail was generated
       const stream = fs.createReadStream(fullPath);
       return new NextResponse(stream as any, {
         headers: {
