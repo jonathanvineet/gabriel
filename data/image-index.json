@@ -1,4 +1,14 @@
 {
-  "images": {},
-  "lastScan": 1763322420753
+  "images": {
+    "IMG_5535.PNG": {
+      "path": "IMG_5535.PNG",
+      "filename": "IMG_5535.PNG",
+      "description": "IMG_5535",
+      "hash": "3909cce37facbbf98d578149b2f29ac5",
+      "size": 5689728,
+      "lastModified": 1763395256501.3164,
+      "indexed": 1763395346606
+    }
+  },
+  "lastScan": 1763395346635
 }

@@ -1,0 +1,53 @@
+ ⨯ ./app/api/download/route.ts:66:11
+Ecmascript file had an error
+  64 |     // Stream file to client to avoid loading whole file into memory and to
+  65 |     // enable faster initial response streaming for large files.
+> 66 |     const stats = fs.statSync(fullPath);
+     |           ^^^^^
+  67 |     const stream = fs.createReadStream(fullPath);
+  68 |     return new NextResponse(stream as any, {
+  69 |       headers: {
+
+the name `stats` is defined multiple times
+
+
+Time 6.464381
+ GET /api/download?path=IMG_5535.PNG 500 in 2.0s (compile: 1370ms, render: 638ms)
+Time 2.322699
+ GET /api/debug?test=listFiles 500 in 40ms (compile: 9ms, render: 31ms)
+Time 1.056583
+ GET /api/whiteboards 500 in 102ms (compile: 90ms, render: 12ms)
+ ⨯ ./app/api/download/route.ts:66:11
+Ecmascript file had an error
+  64 |     // Stream file to client to avoid loading whole file into memory and to
+  65 |     // enable faster initial response streaming for large files.
+> 66 |     const stats = fs.statSync(fullPath);
+     |           ^^^^^
+  67 |     const stream = fs.createReadStream(fullPath);
+  68 |     return new NextResponse(stream as any, {
+  69 |       headers: {
+
+the name `stats` is defined multiple times
+
+
+Time 1.016309
+ GET /api/download?path=IMG_5535.PNG 500 in 21ms (compile: 10ms, render: 11ms)
+ ⨯ ./app/api/download/route.ts:66:11
+Ecmascript file had an error
+  64 |     // Stream file to client to avoid loading whole file into memory and to
+  65 |     // enable faster initial response streaming for large files.
+> 66 |     const stats = fs.statSync(fullPath);
+     |           ^^^^^
+  67 |     const stream = fs.createReadStream(fullPath);
+  68 |     return new NextResponse(stream as any, {
+  69 |       headers: {
+
+the name `stats` is defined multiple times
+
+
+Time 2.386072
+ GET /api/download?path=IMG_5535.PNG 500 in 25ms (compile: 7ms, render: 18ms)
+ GET /api/camera-stream 200 in 26.7s (compile: 4ms, render: 26.7s)
+🧹 Cleaning up stale connection 1
+
+
