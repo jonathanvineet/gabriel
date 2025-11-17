@@ -2,6 +2,8 @@ import SwiftUI
 import UIKit
 import QuickLook
 import CoreGraphics
+import AVKit
+import WebKit
 
 extension Color {
     init(hex: String) {
@@ -22,6 +24,43 @@ extension Color {
         self.init(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255, opacity: Double(a) / 255)
     }
 }
+
+// MARK: - Remote viewers
+@available(iOS 15.0, *)
+struct RemoteImageViewer: View {
+    let url: URL
+    var body: some View {
+        GeometryReader { geo in
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .success(let img):
+                    img.resizable().scaledToFit().frame(width: geo.size.width, height: geo.size.height)
+                case .failure:
+                    Image(systemName: "photo").resizable().scaledToFit().padding()
+                @unknown default:
+                    EmptyView()
+                }
+            }
+        }
+    }
+}
+
+@available(iOS 15.0, *)
+struct RemoteWebViewer: UIViewRepresentable {
+    let url: URL
+    func makeUIView(context: Context) -> WKWebView {
+        let w = WKWebView()
+        // Avoid directly toggling `isZoomEnabled` (not available on all SDK overlays).
+        // WKWebView's scrollView supports zooming behavior for some content by default.
+        w.allowsBackForwardNavigationGestures = false
+        w.load(URLRequest(url: url))
+        return w
+    }
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
+}
+
 
 // QuickLook wrapper to preview many file types (PDF, audio, video, images, etc.)
 struct QuickLookPreview: UIViewControllerRepresentable {
@@ -1408,6 +1447,11 @@ struct FileManagerView: View {
     // quickly to avoid QuickLook showing "No preview available".
     @State private var previewPlaceholderImage: UIImage? = nil
     @State private var showingPlaceholderPreview = false
+    // Remote streaming/viewing
+    @State private var remoteURL: URL? = nil
+    @State private var showingRemoteImage = false
+    @State private var showingRemoteVideo = false
+    @State private var showingRemoteWeb = false
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -1658,6 +1702,28 @@ struct FileManagerView: View {
                     Text("No preview available")
                 }
             }
+            .sheet(isPresented: $showingRemoteImage, onDismiss: { remoteURL = nil }) {
+                if let url = remoteURL {
+                    RemoteImageViewer(url: url)
+                } else {
+                    Text("No image")
+                }
+            }
+            .sheet(isPresented: $showingRemoteVideo, onDismiss: { remoteURL = nil }) {
+                if let url = remoteURL {
+                    VideoPlayer(player: AVPlayer(url: url))
+                        .edgesIgnoringSafeArea(.all)
+                } else {
+                    Text("No media")
+                }
+            }
+            .sheet(isPresented: $showingRemoteWeb, onDismiss: { remoteURL = nil }) {
+                if let url = remoteURL {
+                    RemoteWebViewer(url: url)
+                } else {
+                    Text("No preview")
+                }
+            }
             .animation(.spring(response: 0.6, dampingFraction: 0.8), value: showingImageViewer)
             .onAppear { loadFiles() }
         }
@@ -1698,39 +1764,68 @@ extension FileManagerView {
         return imageExtensions.contains(name.components(separatedBy: ".").last?.lowercased() ?? "")
     }
 
-    // Download the file and present it using QuickLook (supports PDFs, audio, video, images, etc.)
+    func isVideoFile(_ name: String) -> Bool {
+        let exts = ["mp4", "mov", "m4v", "webm"]
+        return exts.contains(name.components(separatedBy: ".").last?.lowercased() ?? "")
+    }
+
+    func isAudioFile(_ name: String) -> Bool {
+        let exts = ["mp3", "wav", "m4a", "aac"]
+        return exts.contains(name.components(separatedBy: ".").last?.lowercased() ?? "")
+    }
+
+    func isPdfFile(_ name: String) -> Bool {
+        return name.components(separatedBy: ".").last?.lowercased() == "pdf"
+    }
+
+    // Open a file. For common media types (images, video, audio, PDF)
+    // prefer streaming directly from the server so the app doesn't
+    // need to fully download the file first. For unknown types we
+    // fall back to download+QuickLook.
     func openFile(item: FileItem) {
-        // 1) Prefetch a small thumbnail quickly and show a lightweight
-        // placeholder (image or spinner) so the user sees immediate
-        // feedback while the full file downloads.
+        let name = item.name
+        // Try to get a direct server URL
+        if let remote = FileManagerClient.shared.urlForFile(path: item.path) {
+            if isImageFile(name) {
+                // Show remote image directly
+                self.remoteURL = remote
+                self.showingRemoteImage = true
+                return
+            }
+
+            if isVideoFile(name) || isAudioFile(name) {
+                // Stream media via AVPlayer
+                self.remoteURL = remote
+                self.showingRemoteVideo = true
+                return
+            }
+
+            if isPdfFile(name) {
+                // Display PDFs in a lightweight web view
+                self.remoteURL = remote
+                self.showingRemoteWeb = true
+                return
+            }
+        }
+
+        // Fallback: prefetch a small thumbnail then download the full file
         FileManagerClient.shared.prefetchThumbnail(path: item.path) { img in
             DispatchQueue.main.async {
-                if let img = img {
-                    self.previewPlaceholderImage = img
-                } else {
-                    self.previewPlaceholderImage = nil
-                }
-                // Present the lightweight placeholder sheet immediately
-                // (it will be dismissed when the full QuickLook preview is ready).
+                self.previewPlaceholderImage = img
                 self.showingPlaceholderPreview = true
             }
         }
 
-        // 2) Start the full download with high priority. When it
-        // completes present QuickLook and dismiss the placeholder.
         FileManagerClient.shared.downloadFile(at: item.path) { result in
             switch result {
             case .success(let localURL):
                 DispatchQueue.main.async {
-                    // Dismiss the placeholder and show QuickLook for the
-                    // fully downloaded file.
                     self.showingPlaceholderPreview = false
                     self.previewURL = localURL
                     self.showingPreview = true
                 }
             case .failure(let err):
                 DispatchQueue.main.async {
-                    // Hide placeholder and optionally show an error toast later
                     self.showingPlaceholderPreview = false
                 }
                 print("Failed to download file for preview: \(err)")

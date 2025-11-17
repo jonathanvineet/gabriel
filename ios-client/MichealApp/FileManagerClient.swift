@@ -260,6 +260,14 @@ final class FileManagerClient: NSObject {
         task.resume()
     }
 
+    // Return a direct URL to download/stream the file from the server without
+    // downloading it into the app first. Useful for AVPlayer, AsyncImage, WKWebView.
+    func urlForFile(path serverPath: String) -> URL? {
+        guard var components = URLComponents(string: SERVER_BASE_URL + "/api/download") else { return nil }
+        components.queryItems = [URLQueryItem(name: "path", value: serverPath)]
+        return components.url
+    }
+
     // Delete a file or folder on server
     func delete(serverPath: String, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let url = URL(string: SERVER_BASE_URL + "/api/files") else { return }
