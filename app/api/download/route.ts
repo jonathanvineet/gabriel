@@ -63,7 +63,6 @@ export async function GET(request: NextRequest) {
 
     // Stream file to client to avoid loading whole file into memory and to
     // enable faster initial response streaming for large files.
-    const stats = fs.statSync(fullPath);
     const stream = fs.createReadStream(fullPath);
     return new NextResponse(stream as any, {
       headers: {
