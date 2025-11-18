@@ -47,6 +47,17 @@ export async function GET(request: NextRequest) {
     const ext = path.extname(fullPath).toLowerCase();
     const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'];
 
+    // If the filename is a macOS resource-fork / dotfile (starts with "._" or "."),
+    // skip thumbnail generation and return a tiny transparent PNG placeholder.
+    const baseName = path.basename(fullPath);
+    if (baseName.startsWith('._') || baseName.startsWith('.')) {
+      const onePixelPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII=';
+      const buf = Buffer.from(onePixelPngBase64, 'base64');
+      return new NextResponse(buf, {
+        headers: { 'Content-Type': 'image/png', 'Content-Length': String(buf.length), 'Cache-Control': 'public, max-age=3600' }
+      });
+    }
+
     if (imageExts.includes(ext)) {
       // Support width/height query parameters for server-side resized thumbnails.
       const w = parseInt(searchParams.get('w') || '', 10) || 0;
@@ -72,7 +83,10 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // If sharp is available and a resize is requested, generate thumbnail
+      // If sharp is available and a resize is requested, attempt to generate thumbnail.
+      // If Sharp fails (unsupported format or missing codec), return a small placeholder
+      // instead of attempting to stream an unsupported original file which can cause
+      // client-side decode errors.
       if (sharp && (w > 0 || h > 0)) {
         try {
           const data = await sharp(fullPath).resize(w > 0 ? w : null, h > 0 ? h : null, { fit: 'inside' }).jpeg({ quality: 80 }).toBuffer();
@@ -89,15 +103,41 @@ export async function GET(request: NextRequest) {
           });
         } catch (err) {
           console.error('sharp thumbnail generation failed', err);
-          // Fall back to serving original file below
+          // If Sharp failed due to unsupported format, behave conservatively:
+          // - For HEIC/HEIF files, stream the original file with correct MIME so
+          //   iOS clients can display it natively.
+          // - For other unsupported formats, return a tiny PNG placeholder.
+          const heicExts = ['.heic', '.heif'];
+          if (heicExts.includes(ext)) {
+            const mime = ext === '.heif' ? 'image/heif' : 'image/heic';
+            const stream = fs.createReadStream(fullPath);
+            return new NextResponse(stream as any, {
+              headers: {
+                'Content-Type': mime,
+                'Cache-Control': 'public, max-age=3600'
+              }
+            });
+          }
+
+          const onePixelPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAAWgmWQ0AAAAASUVORK5CYII=';
+          const buf = Buffer.from(onePixelPngBase64, 'base64');
+          return new NextResponse(buf, {
+            headers: {
+              'Content-Type': 'image/png',
+              'Content-Length': String(buf.length),
+              'Cache-Control': 'public, max-age=3600'
+            }
+          });
         }
       }
 
-      // Serve original image if no thumbnail was generated
+      // Serve original image if no resize requested (or sharp not available).
+      // Map extension to content-type conservatively.
+      const mime = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
       const stream = fs.createReadStream(fullPath);
       return new NextResponse(stream as any, {
         headers: {
-          'Content-Type': ext === '.png' ? 'image/png' : 'image/jpeg',
+          'Content-Type': mime,
           'Cache-Control': 'public, max-age=3600'
         }
       });

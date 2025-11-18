@@ -29,26 +29,61 @@ extension Color {
 final class QuickLookPresenter: NSObject {
     static let shared = QuickLookPresenter()
     private var dataSource: QuickLookDataSource?
+    private var isPresentingQL: Bool = false
+    private var pendingURL: URL? = nil
 
     func present(url: URL) {
         DispatchQueue.main.async {
+            // Serialize presentations: if a QuickLook is active, queue this URL.
+            if self.isPresentingQL {
+                self.pendingURL = url
+                return
+            }
+
             guard let top = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .flatMap({ $0.windows })
                 .first(where: { $0.isKeyWindow })?.rootViewController else {
                 return
             }
-            let ql = QLPreviewController()
-            let ds = QuickLookDataSource(url: url)
-            self.dataSource = ds
-            ql.dataSource = ds
-            ql.delegate = ds
-            top.present(ql, animated: true, completion: nil)
+
+            let presentQL: () -> Void = {
+                let ql = QLPreviewController()
+                let ds = QuickLookDataSource(url: url)
+                self.dataSource = ds
+                ql.dataSource = ds
+                ql.delegate = ds
+                self.isPresentingQL = true
+                top.present(ql, animated: true, completion: nil)
+            }
+
+            // If a presentation is already in progress, dismiss it non-animated first,
+            // then present QuickLook. This avoids the runtime warning where a new
+            // presentation is attempted while another is being presented.
+            if let presented = top.presentedViewController {
+                presented.dismiss(animated: false) {
+                    // Small async hop to ensure UIKit updates its presentation state
+                    DispatchQueue.main.async {
+                        presentQL()
+                    }
+                }
+            } else {
+                presentQL()
+            }
         }
     }
 
     func clear() {
+        // Called when a QL preview is dismissed. Clear data source and, if a pending
+        // URL exists, present it next.
         dataSource = nil
+        DispatchQueue.main.async {
+            self.isPresentingQL = false
+            if let next = self.pendingURL {
+                self.pendingURL = nil
+                self.present(url: next)
+            }
+        }
     }
 }
 
@@ -1463,12 +1498,14 @@ struct CameraFeedCard: View {
 @available(iOS 15.0, *)
 struct FileManagerView: View {
     @Binding var showDashboard: Bool
-    // Simple in-memory cache so we only fetch once per app session unless forced
-    private static var cachedFiles: [FileItem] = []
-    private static var didLoadFiles: Bool = false
+    // Simple in-memory cache keyed by path so each folder listing is cached separately
+    private static var cachedFilesByPath: [String: [FileItem]] = [:]
+    private static var didLoadPaths: Set<String> = []
     @State private var files: [FileItem] = []
     @State private var loading = false
-    @State private var currentPath = ""
+    // Persist the current folder across view recreations so breadcrumbs and state remain
+    // when navigating back and forth between dashboard and cloud storage.
+    @AppStorage("filemanager.currentPath") private var currentPath: String = ""
     @State private var showPicker = false
     @State private var uploadProgress: Double = 0.0
     @State private var isUploading = false
@@ -1492,6 +1529,8 @@ struct FileManagerView: View {
     @State private var activePlayer: AVPlayer? = nil
     @State private var isStreamingLoading = false
     @State private var playerStatusObserver: NSKeyValueObservation? = nil
+    // Prevent re-entrant preview opens
+    @State private var isOpeningPreview = false
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -1688,7 +1727,7 @@ struct FileManagerView: View {
                         // Insert at top of lists so users see it immediately
                         DispatchQueue.main.async {
                             self.files.insert(optimistic, at: 0)
-                            FileManagerView.cachedFiles = self.files
+                            FileManagerView.cachedFilesByPath[self.currentPath] = self.files
                         }
 
                         isUploading = true
@@ -1715,7 +1754,7 @@ struct FileManagerView: View {
                                         // Remove optimistic placeholder on failure
                                         DispatchQueue.main.async {
                                             self.files.removeAll { $0.path == serverPath }
-                                            FileManagerView.cachedFiles = self.files
+                                            FileManagerView.cachedFilesByPath[self.currentPath] = self.files
                                         }
                                     }
                                 }
@@ -1760,7 +1799,24 @@ struct FileManagerView: View {
                             .padding()
                         }
                     } else if let url = previewURL {
-                        QuickLookPreview(url: url)
+                        // Use the programmatic QuickLook presenter instead of embedding
+                        // a QuickLookController inside a SwiftUI sheet to avoid
+                        // double-presentation conflicts on iPad. Present and then
+                        // dismiss this transient sheet.
+                        VStack {
+                            Text("Opening preview…")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .onAppear {
+                                    QuickLookPresenter.shared.present(url: url)
+                                    // Dismiss the SwiftUI sheet so only the programmatic
+                                    // QLPreviewController is visible. Delay slightly to
+                                    // avoid race with presentation.
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                        isPresentingLocalPreview = false
+                                    }
+                                }
+                        }
                     } else {
                         VStack(spacing: 12) {
                             Image(systemName: "exclamationmark.triangle")
@@ -1850,8 +1906,8 @@ struct FileManagerView: View {
 @available(iOS 15.0, *)
 extension FileManagerView {
     func loadFiles(force: Bool = false) {
-        if FileManagerView.didLoadFiles && !force {
-            files = FileManagerView.cachedFiles
+        if !force, let cached = FileManagerView.cachedFilesByPath[currentPath] {
+            files = cached
             return
         }
 
@@ -1872,8 +1928,8 @@ extension FileManagerView {
                     }
 
                     self.files = filtered
-                    FileManagerView.cachedFiles = filtered
-                    FileManagerView.didLoadFiles = true
+                    FileManagerView.cachedFilesByPath[self.currentPath] = filtered
+                    FileManagerView.didLoadPaths.insert(self.currentPath)
                 case .failure(let err):
                     print("list error: \(err)")
                 }
@@ -1907,17 +1963,15 @@ extension FileManagerView {
     // need to fully download the file first. For unknown types we
     // fall back to download+QuickLook.
     func openFile(item: FileItem) {
-        // Simplified, robust preview flow:
-        // 1. Present a single local-preview sheet and show a thumbnail or spinner.
-        // 2. If media (video/audio) and streaming is available, switch to remote player.
-        // 3. Otherwise ensure a local copy exists (use cached copy if present), download if needed,
-        //    validate images, then present QuickLook.
+        // Robust, single-entry preview flow with validation and serialized presentation.
+        guard !isOpeningPreview else { return }
+        isOpeningPreview = true
 
         let filename = item.name
         let localDocs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let localURL = localDocs.appendingPathComponent(filename)
 
-        // Reset preview state and show placeholder UI immediately
+        // Reset preview UI immediately and show placeholder
         DispatchQueue.main.async {
             self.previewURL = nil
             self.previewPlaceholderImage = nil
@@ -1932,12 +1986,28 @@ extension FileManagerView {
             }
         }
 
-        // If this is streamable media, prefer streaming path
-        if isVideoFile(filename) || isAudioFile(filename) {
-            if let remote = FileManagerClient.shared.urlForFile(path: item.path) {
-                DispatchQueue.main.async {
-                    // Close local preview if shown and present AVPlayerViewController
-                    self.isPresentingLocalPreview = false
+        func finishOpening() {
+            DispatchQueue.main.async { self.isOpeningPreview = false }
+        }
+
+        func presentLocal(_ url: URL) {
+            DispatchQueue.main.async {
+                self.isLoadingPreview = false
+                // Dismiss the placeholder sheet before presenting QL to avoid conflicts
+                self.isPresentingLocalPreview = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                    QuickLookPresenter.shared.present(url: url)
+                    finishOpening()
+                }
+            }
+        }
+
+        func presentRemotePlayer(_ remote: URL) {
+            DispatchQueue.main.async {
+                self.isLoadingPreview = false
+                // Dismiss placeholder first
+                self.isPresentingLocalPreview = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
                     let player = AVPlayer(url: remote)
                     let pvc = AVPlayerViewController()
                     pvc.player = player
@@ -1947,14 +2017,24 @@ extension FileManagerView {
                         .first(where: { $0.isKeyWindow })?.rootViewController {
                         top.present(pvc, animated: true) {
                             player.play()
+                            finishOpening()
                         }
+                    } else {
+                        finishOpening()
                     }
                 }
+            }
+        }
+
+        // If streamable, prefer streaming
+        if isVideoFile(filename) || isAudioFile(filename) {
+            if let remote = FileManagerClient.shared.urlForFile(path: item.path) {
+                presentRemotePlayer(remote)
                 return
             }
         }
 
-        // If a local copy already exists, validate and present immediately
+        // If local copy exists, validate it first
         if FileManager.default.fileExists(atPath: localURL.path) {
             DispatchQueue.global(qos: .userInitiated).async {
                 var valid = true
@@ -1962,22 +2042,21 @@ extension FileManagerView {
                     if UIImage(contentsOfFile: localURL.path) == nil { valid = false }
                 }
                 DispatchQueue.main.async {
-                    self.isLoadingPreview = false
-                    // Dismiss placeholder and present QuickLook programmatically
-                    self.isPresentingLocalPreview = false
                     if valid {
-                        QuickLookPresenter.shared.present(url: localURL)
+                        presentLocal(localURL)
                     } else {
+                        // Remove corrupt file and fallthrough to download
                         try? FileManager.default.removeItem(at: localURL)
-                        self.isPresentingLocalPreview = true
+                        // continue to download below
+                        DispatchQueue.main.async { self.isLoadingPreview = true; self.isPresentingLocalPreview = true }
                     }
                 }
             }
-            // If valid, above will present; if invalid it will continue below after removal.
+            // If file existed and was valid, presentLocal will return; otherwise continue to download
             if FileManager.default.fileExists(atPath: localURL.path) { return }
         }
 
-        // Download fresh copy to local Documents
+        // Download a fresh copy and validate
         FileManagerClient.shared.downloadFile(at: item.path) { result in
             switch result {
             case .success(let downloadedURL):
@@ -1987,14 +2066,14 @@ extension FileManagerView {
                         if UIImage(contentsOfFile: downloadedURL.path) == nil { valid = false }
                     }
                     DispatchQueue.main.async {
-                        self.isLoadingPreview = false
-                        self.isPresentingLocalPreview = false
                         if valid {
-                            QuickLookPresenter.shared.present(url: downloadedURL)
+                            presentLocal(downloadedURL)
                         } else {
-                            // Corrupt download: remove and show unavailable
+                            // Corrupt download: remove, show unavailable and allow retry
                             try? FileManager.default.removeItem(at: downloadedURL)
+                            self.isLoadingPreview = false
                             self.isPresentingLocalPreview = true
+                            finishOpening()
                         }
                     }
                 }
@@ -2003,6 +2082,7 @@ extension FileManagerView {
                     self.isLoadingPreview = false
                     self.previewURL = nil
                     self.isPresentingLocalPreview = true
+                    finishOpening()
                 }
                 print("Failed to download file for preview: \(err)")
             }
@@ -2307,60 +2387,55 @@ struct FileGridItem: View {
         @Namespace private var animationNamespace
         
         var body: some View {
-            VStack {
-                ZStack {
-                    if item.isDirectory {
-                        Image(systemName: "folder.fill")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(height: 80)
-                            .foregroundColor(.yellow)
-                    } else if let thumb = thumbnail {
-                        Image(uiImage: thumb)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 100, height: 100)
-                            .cornerRadius(8)
-                    } else {
-                        ZStack {
-                            Rectangle()
-                                .fill(Color.gray.opacity(0.2))
-                                .frame(width: 100, height: 100)
-                                .cornerRadius(8)
-                            
-                            Image(systemName: iconForFile(item.name))
+            Button(action: {
+                onTap()
+            }) {
+                VStack {
+                    ZStack {
+                        if item.isDirectory {
+                            Image(systemName: "folder.fill")
                                 .resizable()
                                 .scaledToFit()
-                                .frame(height: 50)
-                                .foregroundColor(.blue)
+                                .frame(height: 80)
+                                .foregroundColor(.yellow)
+                        } else if let thumb = thumbnail {
+                            Image(uiImage: thumb)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 100, height: 100)
+                                .cornerRadius(8)
+                        } else {
+                            ZStack {
+                                Rectangle()
+                                    .fill(Color.gray.opacity(0.2))
+                                    .frame(width: 100, height: 100)
+                                    .cornerRadius(8)
+                                
+                                Image(systemName: iconForFile(item.name))
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(height: 50)
+                                    .foregroundColor(.blue)
+                            }
                         }
                     }
+                    .frame(width: 100, height: 100)
+                    
+                    Text(item.name)
+                        .font(.caption)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(height: 30)
                 }
-                .frame(width: 100, height: 100)
-                .scaleEffect(isPressed ? 0.95 : 1.0)
-                
-                Text(item.name)
-                    .font(.caption)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .frame(height: 30)
             }
-            .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                // Long press triggers expansion
+            .buttonStyle(PlainButtonStyle())
+            .simultaneousGesture(LongPressGesture(minimumDuration: 0.5).onEnded { _ in
                 if !item.isDirectory && isImageFile(item.name) {
                     withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                         onTap()
                     }
                 }
-            } onPressingChanged: { pressing in
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isPressed = pressing
-                }
-            }
-            .onTapGesture {
-                // Regular tap — call the tap handler for both images and other files.
-                onTap()
-            }
+            })
             .onAppear {
                 // Start thumbnail prefetch for image files only, using a shared
                 // prefetcher with limited concurrency and an in-memory cache.
